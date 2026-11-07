@@ -1,8 +1,9 @@
 # AGENTS.md
 
-headhunter-agent is an AI headhunter packaged as an agent skill. It keeps a local
-database of many candidates, reads job boards, scores jobs against candidates,
-writes tailored bilingual resumes, and tracks every application with feedback.
+headhunter-agent is an AI headhunter packaged as an agent skill. It runs a job
+search for the user or for many candidates: it keeps a local candidate database,
+reads job boards, scores jobs against candidates, writes tailored bilingual
+resumes, and tracks every application with feedback.
 This repository holds the skill, its plugin packaging, and its specification.
 
 This file is the single instruction source for every AI agent working in this
