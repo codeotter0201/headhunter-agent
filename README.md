@@ -2,13 +2,13 @@
 
 **English** | [繁體中文](README.zh-TW.md)
 
-**An AI headhunter agent for Claude Code and other AI agents.** It keeps a database of your candidates, reads job boards, scores each job against each candidate, writes tailored bilingual resumes, and tracks every application with feedback.
+**An AI headhunter agent for Claude Code and other AI agents.** Use it for your own job search, or run searches for many candidates at once. It keeps a candidate database, reads job boards, scores each job against each candidate, writes tailored bilingual resumes, and tracks every application with feedback.
 
 > **Status:** in development. The roadmap and feature specifications are tracked in the [roadmap epic](https://github.com/codeotter0201/headhunter-agent/issues/3).
 
 ## Why
 
-Most job-search tools serve one job seeker. Headhunters and career coaches work for **many candidates at once**, and need to remember everything about each of them: their history, every job they were matched with, how each application went, and what to fix next time. `headhunter-agent` is built for that.
+A job search piles up more than anyone can keep straight: old resumes, notes, work logs, certificates and repositories, every job you looked at, how each application went, and what to fix next time. `headhunter-agent` works as your personal headhunter: you are its candidate, and it remembers all of this, with a source for every fact. Headhunters and career coaches run the same workflow for **many candidates at once**.
 
 ## Features
 

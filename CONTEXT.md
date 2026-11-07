@@ -6,7 +6,9 @@ words in issues, pull requests, documents, and skill instructions.
 ## Language
 
 **Candidate**:
-A person the user represents in their job search. Identified by `c-<number>`.
+A person whose job search the agent runs: the user themself, or someone the user
+represents. Identified by `c-<number>`. When the user is their own Candidate,
+still call them the Candidate when talking about their data and job search.
 _Avoid_: user, applicant, profile
 
 **Data folder**:
