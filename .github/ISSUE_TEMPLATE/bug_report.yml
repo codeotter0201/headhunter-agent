@@ -7,7 +7,6 @@ body:
     attributes:
       value: |
         Use fictional people only. Never include a real candidate's name, contact details, resume or feedback.
-        請只使用虛構人物，不要貼上真實候選人的姓名、聯絡方式、履歷或回饋。
 
   - type: dropdown
     id: area

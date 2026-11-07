@@ -46,6 +46,29 @@ repository, whatever tool or model runs it.
 - Shared domain terms are defined in `CONTEXT.md`. Use those terms in issues,
   pull requests, documents, and skill instructions.
 
+## Language
+
+- Write all repository files, issues, pull requests, and commit messages in
+  English.
+- `README.zh-TW.md` is the only Traditional Chinese file. It carries the same
+  content as `README.md`, and each links to the other at the top.
+
+## Where Information Lives
+
+- Planned features and their specifications live in labeled issues: the
+  roadmap epic and its phase issues. Iterate on a plan by updating its issue.
+- Repository files hold only stable, current information, each in one place:
+
+| Information | Owner |
+|---|---|
+| Agent rules | `AGENTS.md` |
+| Domain terms | `CONTEXT.md` |
+| Issue, branch, commit, pull request and release workflow | `CONTRIBUTING.md` |
+| Current skill behavior and data layout | `skills/headhunter/SKILL.md` |
+| Product overview and installation | `README.md`, `README.zh-TW.md` |
+
+- Do not add a documentation folder or a second copy of any of these.
+
 ## Privacy Invariants
 
 - Candidate data lives only in the user's data folder (`$HEADHUNTER_DATA_DIR`,
@@ -60,9 +83,9 @@ repository, whatever tool or model runs it.
 - The development unit is one issue / branch / pull request. Branches start from
   the latest `origin/main`, are named `<type>/issue-<number>-<slug>`, and target
   `main`.
-- `docs/SPEC.md` is the product specification. A change to product behavior or
-  data layout updates the specification, `skills/headhunter/SKILL.md`, and
-  `README.md` in the same pull request.
+- A change to product behavior or data layout updates
+  `skills/headhunter/SKILL.md`, `README.md`, and `README.zh-TW.md` in the same
+  pull request.
 - A change to the data layout states how existing data folders are migrated.
 - The plugin version in `.claude-plugin/plugin.json` changes only in a release
   pull request.
@@ -74,8 +97,9 @@ AGENTS.md                     canonical agent instructions (this file)
 CLAUDE.md                     imports AGENTS.md
 CONTEXT.md                    shared domain terms
 CONTRIBUTING.md               issue, branch, commit, pull request and release rules
-docs/SPEC.md                  product specification
-skills/headhunter/SKILL.md    the headhunter skill
+README.md                     product overview (English)
+README.zh-TW.md               product overview (Traditional Chinese)
+skills/headhunter/SKILL.md    the headhunter skill: current behavior and data layout
 .claude-plugin/               plugin and marketplace manifests
 .github/                      issue forms, PR template, labeler
 .gemini/settings.json         points Gemini CLI to AGENTS.md
@@ -85,7 +109,7 @@ skills/headhunter/SKILL.md    the headhunter skill
 
 - When creating or changing an issue, branch, commit, or pull request, read the
   matching section of `CONTRIBUTING.md` and the forms in `.github/`.
-- When changing what the skill does or how data is stored, read `docs/SPEC.md`
-  and `skills/headhunter/SKILL.md` first.
+- When changing what the skill does or how data is stored, read the issue that
+  specifies the change and `skills/headhunter/SKILL.md` first.
 - When changing plugin packaging, run `claude plugin validate .` and
   `claude plugin validate .claude-plugin/plugin.json` from the repository root.

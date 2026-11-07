@@ -1,75 +1,79 @@
 # Contributing to headhunter-agent
 
-本指南是 contributor 的日常操作入口，人類與 AI agent 都依同一份規則工作。專案原則與 agent 指令見 [AGENTS.md](AGENTS.md)，共用名詞見 [CONTEXT.md](CONTEXT.md)，產品規格見 [docs/SPEC.md](docs/SPEC.md)。
+This guide is the day-to-day entry point for contributors. Humans and AI agents follow the same rules. Project principles and agent instructions are in [AGENTS.md](AGENTS.md), and shared terms are in [CONTEXT.md](CONTEXT.md).
 
-## 目錄
+## Contents
 
-- [快速開始](#快速開始)
-- [與 AI agent 協作](#與-ai-agent-協作)
-- [開發工作流](#開發工作流)
-- [驗證](#驗證)
-- [Issue 規範](#issue-規範)
-- [PR 規範](#pr-規範)
-- [Release 流程](#release-流程)
-- [相關資源](#相關資源)
+- [Getting started](#getting-started)
+- [Working with AI agents](#working-with-ai-agents)
+- [Development workflow](#development-workflow)
+- [Validation](#validation)
+- [Issues](#issues)
+- [Pull requests](#pull-requests)
+- [Releases](#releases)
+- [Resources](#resources)
 
 ---
 
-## 快速開始
+## Getting started
 
-### 環境需求
+### Requirements
 
-| 工具 | 用途 |
+| Tool | Purpose |
 |---|---|
-| Git | 版本控制 |
-| [GitHub CLI](https://cli.github.com) | Issue、PR、label 操作 |
-| 支援 `AGENTS.md` 與 Agent Skills 的 AI coding agent | 依 issue 實作 |
-| [Claude Code](https://claude.com/claude-code) CLI | 驗證與本機載入外掛 |
+| Git | Version control |
+| [GitHub CLI](https://cli.github.com) | Issues, pull requests and labels |
+| An AI coding agent that supports `AGENTS.md` and Agent Skills | Implementing issues |
+| [Claude Code](https://claude.com/claude-code) CLI | Validating and loading the plugin locally |
 
-### 首次設定
+### First-time setup
 
 ```bash
 git clone https://github.com/codeotter0201/headhunter-agent.git
 cd headhunter-agent
 ```
 
-在本機直接載入這個 checkout 的外掛，測試修改中的 skill：
+Load the plugin from this checkout to test a skill you are changing:
 
 ```bash
 claude --plugin-dir .
 ```
 
-開發與測試只使用虛構候選人。資料夾以 `HEADHUNTER_DATA_DIR` 指到 repository 以外的測試位置，不要用你真正的候選人資料：
+Develop and test with fictional Candidates only. Point `HEADHUNTER_DATA_DIR` at a test location outside the repository, never at your real Candidate data:
 
 ```bash
 export HEADHUNTER_DATA_DIR="$HOME/headhunter-data-dev"
 ```
 
----
+### Language
 
-## 與 AI agent 協作
-
-Issue 是交給 agent 的任務契約。任何 agent 都依以下順序取得上下文：
-
-1. `AGENTS.md`：專案原則、隱私規則、repository 規則
-2. `CONTEXT.md`：共用名詞
-3. Issue：問題、驗收條件、不在範圍內的項目
-4. 本文件對應章節：branch、commit、PR 規則
-
-分工：
-
-- **人類**：撰寫或確認 issue、決定 priority、review PR、決定是否合併。
-- **Agent**：在 issue branch 完成最小完整變更、執行驗證、依範本建立 PR，並在 PR 記錄實際執行過的指令與結果。
-
-Agent 的界線：
-
-- Issue 的驗收條件就是完成標準；需求不清楚時在 issue 留言提問，不自行擴大範圍。
-- 發現範圍外的問題時另外回報，經同意後開新 issue，不混入目前的 PR。
-- 建立 PR 不代表可以合併。合併、刪除 branch、發布版本都需要人類明確要求。
+Write repository files, issues, pull requests and commit messages in English. `README.zh-TW.md` is the only Traditional Chinese file; keep it in step with `README.md`.
 
 ---
 
-## 開發工作流
+## Working with AI agents
+
+An issue is the task contract handed to an agent. Every agent builds its context in this order:
+
+1. `AGENTS.md`: project principles, privacy rules, repository rules
+2. `CONTEXT.md`: shared terms
+3. The issue: problem, acceptance criteria, out-of-scope items
+4. The matching section of this guide: branch, commit and pull request rules
+
+Roles:
+
+- **Humans** write or confirm issues, set priority, review pull requests, and decide whether to merge.
+- **Agents** make the smallest complete change on the issue branch, run validation, open a pull request from the template, and record in it the commands they ran and the results.
+
+Agent boundaries:
+
+- The issue's acceptance criteria define done. When requirements are unclear, ask in the issue instead of widening the scope.
+- Report problems outside the scope separately; open a new issue only after agreement, and keep them out of the current pull request.
+- Opening a pull request does not authorize merging. Merging, deleting branches and releasing require an explicit human request.
+
+---
+
+## Development workflow
 
 ```text
 Issue triage and confirmation
@@ -82,13 +86,13 @@ Issue triage and confirmation
   → delete branch, refresh local main
 ```
 
-### Branch 命名
+### Branch names
 
 ```text
 <type>/issue-<number>-<slug>
 ```
 
-`type` 使用 `feat`、`fix`、`refactor`、`perf`、`docs`、`chore` 或 `test`。所有 PR 直接以 `main` 為 base。
+`type` is one of `feat`, `fix`, `refactor`, `perf`, `docs`, `chore` or `test`. Every pull request targets `main`.
 
 ```text
 feat/issue-12-candidate-crud
@@ -96,26 +100,26 @@ fix/issue-34-104-listing-pagination
 docs/issue-56-clarify-success-rating
 ```
 
-### 平行開發
+### Parallel work
 
-同時處理多個 issue 時，每個 issue 使用自己的 `git worktree`，一個 worktree 對應一個 branch 與一個 PR：
+When working on several issues at once, give each issue its own `git worktree`: one worktree, one branch, one pull request.
 
 ```bash
 git fetch origin
 git worktree add ../headhunter-agent-issue-12 -b feat/issue-12-candidate-crud origin/main
 ```
 
-PR 合併後移除 worktree 與本機 branch，再更新本機 `main`。
+After the pull request is merged, remove the worktree and the local branch, then update local `main`.
 
-### Commit message
+### Commit messages
 
-採用 [Conventional Commits](https://www.conventionalcommits.org/)：
+Use [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```text
 <type>(<scope>): <subject>
 ```
 
-`type` 使用 `feat`、`fix`、`docs`、`style`、`refactor`、`test`、`chore` 或 `perf`。`scope` 簡短描述實際影響的範圍，通常對應 `area/*` label，例如 `candidate-db`、`ingest`、`job-sources`、`evaluation`、`resume`、`tracking`、`feedback`、`plugin`、`agent-instructions`、`ci`。
+`type` is one of `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore` or `perf`. `scope` names the area actually affected, usually matching an `area/*` label: `candidate-db`, `ingest`, `job-sources`, `evaluation`, `resume`, `tracking`, `feedback`, `plugin`, `agent-instructions`, `docs`, `ci`, or `workflow`.
 
 ```text
 feat(job-sources): read CakeResume listing pages
@@ -123,31 +127,41 @@ fix(resume): keep glossary names in English resumes
 docs(workflow): clarify agent review boundaries
 ```
 
-變更原因、替代方案與驗證證據放在 commit body、PR 或 issue；current-state 文件不累積歷史敘述。
+Reasons, alternatives and validation evidence go in the commit body, pull request or issue. Current-state files do not accumulate history.
 
 ---
 
-## 驗證
+## Validation
 
-從 repository root 執行受影響的檢查：
+Run the checks for what you changed, from the repository root:
 
-| 變更範圍 | 檢查 |
+| Change | Check |
 |---|---|
-| `.claude-plugin/`、`skills/` | `claude plugin validate .` 與 `claude plugin validate .claude-plugin/plugin.json` |
-| Skill 行為 | 以 `claude --plugin-dir .` 載入，用虛構候選人實際走過受影響的流程 |
-| JSON / YAML 設定 | 解析檔案確認語法正確 |
+| `.claude-plugin/`, `skills/` | `claude plugin validate .` and `claude plugin validate .claude-plugin/plugin.json` |
+| Skill behavior | Load with `claude --plugin-dir .` and walk through the affected flow with fictional Candidates |
+| JSON / YAML files | Parse the file to confirm the syntax |
 
-PR 中記錄執行過的指令與結果；沒有執行的檢查明確寫出，不宣稱已通過。
+`claude plugin validate .claude-plugin/plugin.json` warns that `CLAUDE.md` at the plugin root is not loaded as plugin context. This is expected: `CLAUDE.md` is for agents working on this repository, not for plugin users.
+
+Record the commands you ran and their results in the pull request. State any check you did not run; never claim it passed.
 
 ---
 
-## Issue 規範
+## Issues
 
-優先使用 repository 的 [Bug Report](.github/ISSUE_TEMPLATE/bug_report.yml) 或 [Feature Request](.github/ISSUE_TEMPLATE/feature_request.yml) form。Issue 描述問題、可驗證的驗收條件、必要證據與明確的不在範圍項目；不要先指定實作方式作為唯一答案。
+### Specifications live in issues
 
-**Issue 裡不得出現真實候選人的任何個資。** 重現問題時改用虛構人物與虛構資料。
+Planned features and their specifications live in issues, not in repository files. The roadmap is an epic issue (`type/epic`) with one sub-issue per phase. To change a plan, edit its issue; the labels and sub-issue links keep it traceable.
 
-### 標題
+When a change lands, the behavior it delivers is described in `skills/headhunter/SKILL.md` and the READMEs, and the issue is closed.
+
+### Writing an issue
+
+Use the [Bug Report](.github/ISSUE_TEMPLATE/bug_report.yml) or [Feature Request](.github/ISSUE_TEMPLATE/feature_request.yml) form. Describe the problem, verifiable acceptance criteria, the evidence needed, and what is out of scope. Do not prescribe one implementation as the only answer.
+
+**Never include a real Candidate's personal data in an issue.** Reproduce problems with fictional people and fictional data.
+
+### Title
 
 ```text
 [<Type>] <concise description>
@@ -155,16 +169,16 @@ PR 中記錄執行過的指令與結果；沒有執行的檢查明確寫出，�
 
 ### Labels
 
-| 類別 | 規則 |
+| Family | Rule |
 |---|---|
-| `type/*` | 每個 issue 恰好一個 |
-| `priority/*` | 每個 confirmed issue 恰好一個 |
-| `area/*` | 每個 confirmed issue 至少一個 |
-| `scope/*` | 需要時加入，例如 `scope/breaking`、`scope/data-schema`、`scope/privacy` |
-| `status/*` | 依 lifecycle 更新 |
-| `exp/*` | 適合新手或歡迎社群貢獻時加入 |
+| `type/*` | Exactly one per issue |
+| `priority/*` | Exactly one per confirmed issue |
+| `area/*` | At least one per confirmed issue |
+| `scope/*` | Add when relevant, such as `scope/breaking`, `scope/data-schema`, `scope/privacy` |
+| `status/*` | Updated through the lifecycle |
+| `exp/*` | Add when the issue suits newcomers or community contributions |
 
-Issue form 只會自動加入初始 type 與 `status/triage`；triage 時補上 priority 與最終 area。目前完整的 label 清單以 GitHub 為準：
+Issue forms add only the initial type and `status/triage`; triage adds the priority and final areas. GitHub holds the current label list:
 
 ```bash
 gh label list
@@ -181,32 +195,32 @@ status/triage
 
 ---
 
-## PR 規範
+## Pull requests
 
-### 標題與內容
+### Title and body
 
-PR 標題使用 Conventional Commit 格式：
+Pull request titles use the Conventional Commit format:
 
 ```text
 <type>(<scope>): <description>
 ```
 
-Breaking change 在 type 或 scope 後加 `!`。PR body 使用 [pull request template](.github/pull_request_template.md)，至少包含 summary、related issue、change type、驗證紀錄與必要文件更新。
+Add `!` after the type or scope for a breaking change. The body follows the [pull request template](.github/pull_request_template.md) and includes at least the summary, related issue, change type, validation record and documentation updates.
 
-開 PR 時，labeler 會依變更路徑加上 `area/*`，並依標題的 type 加上 `type/*`。
+When a pull request is opened, the labeler adds `area/*` labels from the changed paths and a `type/*` label from the title.
 
-### 合併流程
+### Merging
 
-1. 從最新 `origin/main` 建立 `<type>/issue-<number>-<slug>`。
-2. 完成最小完整變更與受影響的驗證。
-3. PR 以 `main` 為 base，用 `Fixes #<number>` 或 `Closes #<number>` 關聯 issue。
-4. 由人類 review。Agent 的自我 review 不取代人類 review。
-5. 合併前確認 PR 目前的 head 就是最後驗證過的 commit；有新 commit 就重新驗證。
-6. Squash merge 到 `main`，刪除 issue branch。
+1. Branch `<type>/issue-<number>-<slug>` from the latest `origin/main`.
+2. Make the smallest complete change and run the affected validation.
+3. Target `main` and link the issue with `Fixes #<number>` or `Closes #<number>`.
+4. A human reviews. An agent's self-review does not replace human review.
+5. Before merging, confirm the pull request head is the last validated commit; any new commit needs validating again.
+6. Squash merge into `main` and delete the issue branch.
 
-### Draft PR
+### Draft pull requests
 
-追蹤進行中的工作或想先取得回饋時使用 draft PR：
+Use a draft pull request to track work in progress or get early feedback:
 
 ```bash
 gh pr create --draft --base main \
@@ -217,25 +231,25 @@ gh pr ready
 
 ---
 
-## Release 流程
+## Releases
 
-版本號以 `.claude-plugin/plugin.json` 的 `version` 為準，採用 [Semantic Versioning](https://semver.org/)。
+The version is the `version` field in `.claude-plugin/plugin.json`, following [Semantic Versioning](https://semver.org/).
 
-1. 開一個 release PR，只更新版本號與必要的文件。
-2. 合併後，在合併的 commit 上建立 GitHub Release，tag 為 `v<version>`，release notes 列出這個版本的變更。
+1. Open a release pull request that changes only the version and the necessary documentation.
+2. After it is merged, create a GitHub Release on the merge commit with the tag `v<version>`, and list the changes in the release notes.
 
-不要直接 push `main` 或手動建立 tag 來取代 release PR。
+Do not push to `main` directly or create tags by hand in place of a release pull request.
 
 ---
 
-## 相關資源
+## Resources
 
-| 資源 | 位置 |
+| Resource | Location |
 |---|---|
-| Agent 指令與專案原則 | [AGENTS.md](AGENTS.md) |
-| 共用名詞 | [CONTEXT.md](CONTEXT.md) |
-| 產品規格 | [docs/SPEC.md](docs/SPEC.md) |
-| Skill 指令 | [skills/headhunter/SKILL.md](skills/headhunter/SKILL.md) |
-| Issue form 與 PR template | [.github/](.github) |
+| Agent instructions and principles | [AGENTS.md](AGENTS.md) |
+| Shared terms | [CONTEXT.md](CONTEXT.md) |
+| Skill behavior and data layout | [skills/headhunter/SKILL.md](skills/headhunter/SKILL.md) |
+| Roadmap | [Epic issues](https://github.com/codeotter0201/headhunter-agent/issues?q=label%3Atype%2Fepic) |
+| Issue forms and pull request template | [.github/](.github) |
 
-需要協助時，在相關 issue 或 PR 留下已確認的事實、執行過的指令與尚未解決的阻礙。
+When you need help, leave the confirmed facts, the commands you ran and the remaining blockers in the relevant issue or pull request.

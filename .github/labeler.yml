@@ -14,8 +14,8 @@ area/agent-instructions:
 area/docs:
   - changed-files:
     - any-glob-to-any-file:
-        - 'docs/**'
         - 'README.md'
+        - 'README.zh-TW.md'
         - 'CONTRIBUTING.md'
 
 area/ci:
