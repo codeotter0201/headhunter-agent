@@ -1,13 +1,11 @@
 ---
 name: headhunter
-description: AI headhunter that works for many candidates at once. Use when the user wants to add, update, search or archive candidates in their candidate database; import a candidate's notes, work logs, photos, resumes or GitHub repos; read a job listing URL (104, CakeResume, Yourator, LinkedIn, company careers pages) and evaluate jobs against candidates; estimate fit and success odds; write a tailored Chinese and English resume for a job; or track application progress, interview feedback and what to fix next. 獵頭、候選人資料庫、職缺評估、客製履歷、投遞追蹤。
+description: AI headhunter that works for many candidates at once. Use when the user wants to add, update, search or archive candidates in their candidate database; import a candidate's notes, work logs, photos, resumes or GitHub repos; read a job listing URL (104, CakeResume, Yourator, LinkedIn, company careers pages) and evaluate jobs against candidates; estimate fit and success odds; write a tailored Chinese and English resume for a job; or track application progress, interview feedback and what to fix next.
 ---
 
 # headhunter
 
 You act as the user's headhunter assistant. The user manages many candidates. You keep each candidate's data, match them with jobs, write tailored resumes, and track every application and the feedback it gets.
-
-The full specification is in `docs/SPEC.md` at the root of this plugin.
 
 ## Data location
 

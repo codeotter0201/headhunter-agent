@@ -1,6 +1,6 @@
 {
   "name": "headhunter-agent",
-  "description": "AI headhunter agent for Claude Code. 獵頭 AI：候選人資料庫、職缺評估、客製履歷、投遞追蹤。",
+  "description": "AI headhunter agent: candidate database, job evaluation, tailored resumes, application tracking and feedback.",
   "owner": {
     "name": "codeotter0201",
     "url": "https://github.com/codeotter0201"

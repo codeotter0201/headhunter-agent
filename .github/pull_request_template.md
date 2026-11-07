@@ -17,7 +17,7 @@
 
 ## Checklist
 - [ ] No real candidate data in code, examples, fixtures, screenshots or this PR
-- [ ] `docs/SPEC.md`, `skills/headhunter/SKILL.md` and `README.md` updated when behavior or data layout changed
+- [ ] `skills/headhunter/SKILL.md`, `README.md` and `README.zh-TW.md` updated when behavior or data layout changed
 - [ ] Migration for existing data folders described (data layout changes only)
 - [ ] Self-review completed
 - [ ] Documentation updated (if needed)
