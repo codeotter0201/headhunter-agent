@@ -32,6 +32,8 @@ Most job-search tools serve one job seeker. Headhunters and career coaches work 
 
 Then run `/headhunter` in Claude Code.
 
+Other AI agents that support the Agent Skills format can use the skill too: copy `skills/headhunter/` into that agent's skills folder.
+
 ## Your data stays local
 
 Candidate data never goes into this repository. It lives in `~/headhunter-data/` on your machine (or the folder set in `HEADHUNTER_DATA_DIR`) and is not sent to any third-party service.
@@ -62,9 +64,19 @@ Candidate data never goes into this repository. It lives in `~/headhunter-data/`
 
 安裝後在 Claude Code 輸入 `/headhunter`。
 
+其他支援 Agent Skills 格式的 AI agent 也能使用：把 `skills/headhunter/` 複製到該 agent 的 skills 資料夾即可。
+
 ### 資料只存在本機
 
 候選人資料永遠不會進入這個 repo，只存在你電腦上的 `~/headhunter-data/`（或 `HEADHUNTER_DATA_DIR` 指定的資料夾），也不會上傳到任何第三方服務。
+
+---
+
+## Contributing
+
+Work happens through issues and pull requests, with humans and AI agents following the same rules. Start with [CONTRIBUTING.md](CONTRIBUTING.md); agents read [AGENTS.md](AGENTS.md) first.
+
+開發以 issue 與 PR 進行，人類與 AI agent 依同一套規則協作。請先閱讀 [CONTRIBUTING.md](CONTRIBUTING.md)；AI agent 先讀 [AGENTS.md](AGENTS.md)。
 
 ---
 

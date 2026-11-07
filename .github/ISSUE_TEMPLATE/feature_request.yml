@@ -1,0 +1,71 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+title: "[Feature] "
+labels: ["type/feature", "status/triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use fictional people only. Never include a real candidate's name, contact details, resume or feedback.
+        請只使用虛構人物，不要貼上真實候選人的姓名、聯絡方式、履歷或回饋。
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Target Area
+      description: Which part of headhunter-agent would this affect?
+      options:
+        - candidate-db
+        - ingest
+        - job-sources
+        - evaluation
+        - resume
+        - tracking
+        - feedback
+        - plugin
+        - agent-instructions
+        - docs
+        - ci
+        - Multiple/Cross-cutting
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this feature solve?
+      placeholder: As a headhunter, I want [feature] so that [benefit]...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe how you envision this feature working
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: Verifiable outcomes that define when this is done
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of Scope
+      description: What this issue deliberately does not cover
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Other approaches you've thought about

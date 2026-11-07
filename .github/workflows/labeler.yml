@@ -1,0 +1,28 @@
+name: "Util: Labeler"
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  label:
+    name: Classify pull request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/labeler@v5
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Classify Conventional Commit type
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/refresh-pr-type-label.sh "${{ github.event.pull_request.number }}"

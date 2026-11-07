@@ -1,0 +1,80 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[Bug] "
+labels: ["type/bug", "status/triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use fictional people only. Never include a real candidate's name, contact details, resume or feedback.
+        請只使用虛構人物，不要貼上真實候選人的姓名、聯絡方式、履歷或回饋。
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area
+      description: Which part of headhunter-agent is affected?
+      options:
+        - candidate-db
+        - ingest
+        - job-sources
+        - evaluation
+        - resume
+        - tracking
+        - feedback
+        - plugin
+        - agent-instructions
+        - docs
+        - ci
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of the bug
+      placeholder: What happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps to reproduce the behavior, using fictional data
+      placeholder: |
+        1. Run '/headhunter ...'
+        2. Provide '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Where you ran it
+      placeholder: |
+        - OS: [e.g., macOS 15.0, Ubuntu 24.04]
+        - Agent tool and version: [e.g., Claude Code 2.1.0, Codex CLI 0.50.0]
+        - Model: [e.g., the model shown by your agent tool]
+        - headhunter plugin version: [from .claude-plugin/plugin.json]
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs/Output
+      description: Error messages or output, with any personal data removed
+      render: shell

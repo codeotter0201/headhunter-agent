@@ -1,0 +1,23 @@
+area/plugin:
+  - changed-files:
+    - any-glob-to-any-file: '.claude-plugin/**'
+
+area/agent-instructions:
+  - changed-files:
+    - any-glob-to-any-file:
+        - 'AGENTS.md'
+        - 'CLAUDE.md'
+        - 'CONTEXT.md'
+        - '.gemini/**'
+        - 'skills/**'
+
+area/docs:
+  - changed-files:
+    - any-glob-to-any-file:
+        - 'docs/**'
+        - 'README.md'
+        - 'CONTRIBUTING.md'
+
+area/ci:
+  - changed-files:
+    - any-glob-to-any-file: '.github/**'
