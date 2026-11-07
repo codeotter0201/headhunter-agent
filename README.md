@@ -12,7 +12,7 @@ A job search piles up more than anyone can keep straight: old resumes, notes, wo
 
 ## Features
 
-- **Candidate database** — Import notes, work logs, photos, existing resumes and GitHub repos. Every fact keeps a link to its source. Create, read, update and archive candidates; search them by role, industry, seniority, skills or status.
+- **Candidate database** — Hand it anything about a candidate: notes, work logs, photos, existing resumes, GitHub repos. It checks each piece for missing details, vague claims and contradictions, asks follow-up questions, and tags every fact from a shared bilingual taxonomy. Every fact keeps a link to its source, and nothing is filled in without your confirmation. Create, read, update and archive candidates; search candidates and facts by skill, industry, seniority, years of experience, evidence or status.
 - **Job board reading** — Paste a listing URL from 104, CakeResume, Yourator, a company careers page or LinkedIn. It reads the listing, screens the titles, then reads each job in full.
 - **Fit and success scoring** — For one candidate, or across your whole database: a fit score, the reasons for the recommendation, gaps and risks, and a high / medium / low success rating with its reasoning.
 - **Tailored resumes** — A Chinese and an English resume for each job, in Markdown and PDF, built only from facts with a source.
@@ -27,6 +27,8 @@ A job search piles up more than anyone can keep straight: old resumes, notes, wo
 ```
 
 Then run `/headhunter` in Claude Code.
+
+The skill's helper script needs Python 3.9 or later, with no extra packages. Importing a GitHub repository or profile uses the [GitHub CLI](https://cli.github.com) (`gh`).
 
 Other AI agents that support the Agent Skills format can use the skill too: copy `skills/headhunter/` into that agent's skills folder.
 
