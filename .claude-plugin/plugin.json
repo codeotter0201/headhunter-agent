@@ -1,0 +1,23 @@
+{
+  "name": "headhunter",
+  "version": "0.1.0",
+  "description": "AI headhunter agent: candidate database, job board reading, fit and success scoring, tailored bilingual resumes, application tracking and feedback.",
+  "author": {
+    "name": "codeotter0201",
+    "url": "https://github.com/codeotter0201"
+  },
+  "homepage": "https://github.com/codeotter0201/headhunter-agent",
+  "repository": "https://github.com/codeotter0201/headhunter-agent",
+  "license": "MIT",
+  "keywords": [
+    "headhunter",
+    "recruiting",
+    "recruiter",
+    "job-search",
+    "resume",
+    "resume-tailoring",
+    "candidate-management",
+    "applicant-tracking",
+    "career"
+  ]
+}

@@ -1,0 +1,18 @@
+# Candidate data must never be committed
+/headhunter-data/
+/candidates/
+/applications/
+/jobs/
+/companies/
+/archive/
+*.sqlite
+*.sqlite3
+*.db
+.env
+.env.*
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
