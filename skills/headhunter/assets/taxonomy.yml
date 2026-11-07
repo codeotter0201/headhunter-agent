@@ -1,0 +1,173 @@
+# Starter Taxonomy, copied to <data>/taxonomy.yml on first use.
+# Every Tag has an id <dimension>/<slug>, an English and a Chinese label, and
+# optional aliases. A label or alias may belong to only one Tag.
+dimensions: [skill, tool, domain, industry, function, seniority, language, soft-skill]
+tags:
+  # skill: programming languages and practices
+  - {id: skill/python, en: Python, zh: Python}
+  - {id: skill/java, en: Java, zh: Java}
+  - {id: skill/javascript, en: JavaScript, zh: JavaScript, aliases: [js]}
+  - {id: skill/typescript, en: TypeScript, zh: TypeScript, aliases: [ts]}
+  - {id: skill/go, en: Go, zh: Go, aliases: [golang]}
+  - {id: skill/c, en: C, zh: C 語言}
+  - {id: skill/cpp, en: C++, zh: C++}
+  - {id: skill/csharp, en: "C#", zh: "C#", aliases: [c sharp]}
+  - {id: skill/kotlin, en: Kotlin, zh: Kotlin}
+  - {id: skill/swift, en: Swift, zh: Swift}
+  - {id: skill/rust, en: Rust, zh: Rust}
+  - {id: skill/php, en: PHP, zh: PHP}
+  - {id: skill/ruby, en: Ruby, zh: Ruby}
+  - {id: skill/r, en: R, zh: R 語言}
+  - {id: skill/sql, en: SQL, zh: SQL}
+  - {id: skill/data-analysis, en: Data analysis, zh: 數據分析, aliases: [資料分析]}
+  - {id: skill/statistics, en: Statistics, zh: 統計}
+  - {id: skill/data-visualization, en: Data visualization, zh: 資料視覺化}
+  - {id: skill/machine-learning, en: Machine learning, zh: 機器學習, aliases: [ml]}
+  - {id: skill/deep-learning, en: Deep learning, zh: 深度學習}
+  - {id: skill/nlp, en: Natural language processing, zh: 自然語言處理, aliases: [nlp]}
+  - {id: skill/computer-vision, en: Computer vision, zh: 電腦視覺}
+  - {id: skill/llm, en: Large language models, zh: 大型語言模型, aliases: [llms, genai, 生成式 ai]}
+  - {id: skill/etl, en: Data pipelines, zh: 資料管線, aliases: [etl, data pipeline]}
+  - {id: skill/system-design, en: System design, zh: 系統設計}
+  - {id: skill/distributed-systems, en: Distributed systems, zh: 分散式系統}
+  - {id: skill/api-design, en: API design, zh: API 設計, aliases: [rest api, restful api]}
+  - {id: skill/microservices, en: Microservices, zh: 微服務}
+  - {id: skill/database-design, en: Database design, zh: 資料庫設計}
+  - {id: skill/performance, en: Performance optimization, zh: 效能優化}
+  - {id: skill/testing, en: Software testing, zh: 軟體測試, aliases: [unit testing, tdd]}
+  - {id: skill/ci-cd, en: CI/CD, zh: 持續整合與部署}
+  - {id: skill/cloud-architecture, en: Cloud architecture, zh: 雲端架構}
+  - {id: skill/application-security, en: Application security, zh: 應用程式安全}
+  - {id: skill/ui-design, en: UI design, zh: 介面設計}
+  - {id: skill/ux-research, en: UX research, zh: 使用者研究}
+  - {id: skill/product-strategy, en: Product strategy, zh: 產品策略}
+  - {id: skill/agile, en: Agile and Scrum, zh: 敏捷開發, aliases: [scrum]}
+  - {id: skill/financial-analysis, en: Financial analysis, zh: 財務分析}
+  - {id: skill/digital-marketing, en: Digital marketing, zh: 數位行銷}
+  - {id: skill/seo, en: SEO, zh: 搜尋引擎優化}
+
+  # tool: products and frameworks
+  - {id: tool/aws, en: AWS, zh: AWS, aliases: [amazon web services]}
+  - {id: tool/gcp, en: Google Cloud, zh: Google Cloud, aliases: [gcp, google cloud platform]}
+  - {id: tool/azure, en: Azure, zh: Azure}
+  - {id: tool/docker, en: Docker, zh: Docker}
+  - {id: tool/kubernetes, en: Kubernetes, zh: Kubernetes, aliases: [k8s]}
+  - {id: tool/terraform, en: Terraform, zh: Terraform}
+  - {id: tool/linux, en: Linux, zh: Linux}
+  - {id: tool/git, en: Git, zh: Git}
+  - {id: tool/github-actions, en: GitHub Actions, zh: GitHub Actions}
+  - {id: tool/postgresql, en: PostgreSQL, zh: PostgreSQL, aliases: [postgres]}
+  - {id: tool/mysql, en: MySQL, zh: MySQL}
+  - {id: tool/mongodb, en: MongoDB, zh: MongoDB}
+  - {id: tool/redis, en: Redis, zh: Redis}
+  - {id: tool/elasticsearch, en: Elasticsearch, zh: Elasticsearch}
+  - {id: tool/kafka, en: Kafka, zh: Kafka}
+  - {id: tool/spark, en: Spark, zh: Spark, aliases: [apache spark]}
+  - {id: tool/airflow, en: Airflow, zh: Airflow}
+  - {id: tool/dbt, en: dbt, zh: dbt}
+  - {id: tool/pandas, en: pandas, zh: pandas}
+  - {id: tool/scikit-learn, en: scikit-learn, zh: scikit-learn, aliases: [sklearn]}
+  - {id: tool/tensorflow, en: TensorFlow, zh: TensorFlow}
+  - {id: tool/pytorch, en: PyTorch, zh: PyTorch}
+  - {id: tool/react, en: React, zh: React, aliases: [react.js, reactjs]}
+  - {id: tool/vue, en: Vue, zh: Vue, aliases: [vue.js]}
+  - {id: tool/angular, en: Angular, zh: Angular}
+  - {id: tool/node-js, en: Node.js, zh: Node.js, aliases: [node, nodejs]}
+  - {id: tool/django, en: Django, zh: Django}
+  - {id: tool/flask, en: Flask, zh: Flask}
+  - {id: tool/fastapi, en: FastAPI, zh: FastAPI}
+  - {id: tool/spring, en: Spring Boot, zh: Spring Boot, aliases: [spring]}
+  - {id: tool/figma, en: Figma, zh: Figma}
+  - {id: tool/excel, en: Excel, zh: Excel}
+  - {id: tool/tableau, en: Tableau, zh: Tableau}
+  - {id: tool/power-bi, en: Power BI, zh: Power BI}
+  - {id: tool/jira, en: Jira, zh: Jira}
+  - {id: tool/sap, en: SAP, zh: SAP}
+  - {id: tool/salesforce, en: Salesforce, zh: Salesforce}
+
+  # domain: the business or technical area of the work
+  - {id: domain/e-commerce, en: E-commerce, zh: 電子商務, aliases: [ecommerce, 電商]}
+  - {id: domain/fintech, en: Fintech, zh: 金融科技}
+  - {id: domain/payments, en: Payments, zh: 支付, aliases: [金流]}
+  - {id: domain/adtech, en: Ad tech, zh: 廣告科技}
+  - {id: domain/saas, en: SaaS, zh: SaaS}
+  - {id: domain/ai, en: Artificial intelligence, zh: 人工智慧, aliases: [ai]}
+  - {id: domain/data-platform, en: Data platform, zh: 數據平台}
+  - {id: domain/search-recommendation, en: Search and recommendation, zh: 搜尋與推薦, aliases: [recommender systems, 推薦系統]}
+  - {id: domain/embedded, en: Embedded systems, zh: 嵌入式系統}
+  - {id: domain/iot, en: IoT, zh: 物聯網}
+  - {id: domain/cybersecurity, en: Cybersecurity, zh: 資安}
+  - {id: domain/blockchain, en: Blockchain, zh: 區塊鏈, aliases: [web3]}
+  - {id: domain/edtech, en: Edtech, zh: 教育科技}
+  - {id: domain/healthtech, en: Health tech, zh: 醫療科技}
+  - {id: domain/supply-chain, en: Supply chain, zh: 供應鏈}
+
+  # industry: the employer's industry
+  - {id: industry/software, en: Software and internet, zh: 軟體網路, aliases: [software, internet]}
+  - {id: industry/finance, en: Finance, zh: 金融}
+  - {id: industry/banking, en: Banking, zh: 銀行}
+  - {id: industry/insurance, en: Insurance, zh: 保險}
+  - {id: industry/semiconductor, en: Semiconductor, zh: 半導體}
+  - {id: industry/electronics, en: Electronics manufacturing, zh: 電子製造}
+  - {id: industry/manufacturing, en: Manufacturing, zh: 製造}
+  - {id: industry/retail, en: Retail, zh: 零售}
+  - {id: industry/healthcare, en: Healthcare, zh: 醫療}
+  - {id: industry/education, en: Education, zh: 教育}
+  - {id: industry/government, en: Government, zh: 政府, aliases: [public sector, 公部門]}
+  - {id: industry/telecom, en: Telecom, zh: 電信}
+  - {id: industry/media, en: Media, zh: 媒體}
+  - {id: industry/gaming, en: Gaming, zh: 遊戲}
+  - {id: industry/logistics, en: Logistics, zh: 物流}
+  - {id: industry/consulting, en: Consulting, zh: 顧問}
+  - {id: industry/travel, en: Travel, zh: 旅遊}
+
+  # function: the kind of job
+  - {id: function/backend, en: Backend engineering, zh: 後端工程, aliases: [backend, 後端]}
+  - {id: function/frontend, en: Frontend engineering, zh: 前端工程, aliases: [frontend, 前端]}
+  - {id: function/full-stack, en: Full-stack engineering, zh: 全端工程, aliases: [full stack, fullstack, 全端]}
+  - {id: function/mobile, en: Mobile development, zh: 行動開發, aliases: [ios, android, app 開發]}
+  - {id: function/data-science, en: Data science, zh: 資料科學}
+  - {id: function/data-engineering, en: Data engineering, zh: 資料工程}
+  - {id: function/ml-engineering, en: ML engineering, zh: 機器學習工程, aliases: [mle]}
+  - {id: function/devops-sre, en: DevOps and SRE, zh: 維運工程, aliases: [devops, sre, site reliability]}
+  - {id: function/qa, en: Quality assurance, zh: 品質保證, aliases: [qa, 測試工程]}
+  - {id: function/security-engineering, en: Security engineering, zh: 資安工程}
+  - {id: function/product-management, en: Product management, zh: 產品管理, aliases: [pm, product manager]}
+  - {id: function/project-management, en: Project management, zh: 專案管理, aliases: [project manager]}
+  - {id: function/design, en: Design, zh: 設計, aliases: [product design]}
+  - {id: function/marketing, en: Marketing, zh: 行銷}
+  - {id: function/sales, en: Sales, zh: 業務, aliases: [銷售]}
+  - {id: function/operations, en: Operations, zh: 營運}
+  - {id: function/hr, en: Human resources, zh: 人資, aliases: [hr]}
+  - {id: function/finance, en: Finance and accounting, zh: 財務會計, aliases: [accounting, 會計]}
+  - {id: function/customer-success, en: Customer success, zh: 客戶成功}
+  - {id: function/research, en: Research, zh: 研究, aliases: [r&d, 研發]}
+
+  # seniority: level signals in a Fact
+  - {id: seniority/intern, en: Intern, zh: 實習}
+  - {id: seniority/junior, en: Junior, zh: 初階}
+  - {id: seniority/mid, en: Mid-level, zh: 中階}
+  - {id: seniority/senior, en: Senior, zh: 資深}
+  - {id: seniority/lead, en: Tech lead, zh: 技術負責人, aliases: [team lead]}
+  - {id: seniority/manager, en: Manager, zh: 主管, aliases: [people manager, 管理職]}
+  - {id: seniority/director, en: Director, zh: 總監}
+  - {id: seniority/executive, en: Executive, zh: 高階主管, aliases: [c-level, vp]}
+
+  # language: spoken and written languages
+  - {id: language/mandarin, en: Mandarin Chinese, zh: 中文, aliases: [mandarin, chinese, 華語, 國語]}
+  - {id: language/english, en: English, zh: 英文, aliases: [英語]}
+  - {id: language/japanese, en: Japanese, zh: 日文, aliases: [日語]}
+  - {id: language/korean, en: Korean, zh: 韓文, aliases: [韓語]}
+  - {id: language/taiwanese, en: Taiwanese Hokkien, zh: 台語, aliases: [taiwanese, 閩南語]}
+  - {id: language/cantonese, en: Cantonese, zh: 粵語, aliases: [廣東話]}
+
+  # soft-skill: ways of working
+  - {id: soft-skill/communication, en: Communication, zh: 溝通}
+  - {id: soft-skill/leadership, en: Leadership, zh: 領導}
+  - {id: soft-skill/mentoring, en: Mentoring, zh: 指導, aliases: [coaching, 帶人]}
+  - {id: soft-skill/cross-functional, en: Cross-functional collaboration, zh: 跨部門協作}
+  - {id: soft-skill/stakeholder-management, en: Stakeholder management, zh: 利害關係人管理}
+  - {id: soft-skill/problem-solving, en: Problem solving, zh: 問題解決}
+  - {id: soft-skill/presentation, en: Presentation, zh: 簡報}
+  - {id: soft-skill/negotiation, en: Negotiation, zh: 談判}
+  - {id: soft-skill/ownership, en: Ownership, zh: 當責}

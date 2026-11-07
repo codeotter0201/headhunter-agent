@@ -23,14 +23,33 @@ rebuilt at any time.
 _Avoid_: database of record
 
 **Source**:
-One raw input about a Candidate: a note, work log, photo, existing resume, or
-GitHub repository, kept under `sources/`.
+One raw input about a Candidate, such as a note, work log, photo, existing
+resume, GitHub repository, or the user's answers to follow-up questions, kept
+under `sources/` with an evidence level: documented, third-party, or
+self-reported. Identified by `s-<number>`.
 _Avoid_: attachment, upload
 
 **Fact**:
 One statement about a Candidate's experience, skill, or achievement that cites
-the Source it came from.
+the Source it came from. An inferred Fact is drawn from other Facts instead,
+and is usable in resumes only after the user confirms it. Identified by
+`f-<number>`.
 _Avoid_: claim, info, data point
+
+**Import report**:
+The result of importing one Source: Facts extracted, missing fields,
+conflicts, rejected content, proposed Tags, and follow-up questions.
+_Avoid_: import log, quality report
+
+**Tag**:
+A classification label on a Fact, taken from the Taxonomy, such as
+`skill/python` or `industry/finance`.
+_Avoid_: label, keyword, category
+
+**Taxonomy**:
+The shared list of Tags in `taxonomy.yml`, each with a fixed id, Chinese and
+English labels, and aliases.
+_Avoid_: tag list, vocabulary
 
 **Glossary**:
 The Candidate's fixed Chinese ↔ English names for companies, titles, and terms,
