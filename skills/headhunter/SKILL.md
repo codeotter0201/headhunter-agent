@@ -49,10 +49,17 @@ python3 <skill folder>/scripts/hh.py <command>
 | `evaluation match <job> [<id>] [--all]` | List the Candidates and Roles that share Tags with a Job; with a Candidate, list their Facts per Job requirement |
 | `evaluation save <id> <job> [--replace]` | Write an Evaluation from JSON or YAML on stdin; the fit score, gap kinds and Success rating are worked out, and nothing is written if any check fails |
 | `evaluation list [<id>] [--job <job>] [--rating <rating>]` | List Evaluations with their Success ratings |
+| `application new <id> <job> --next <step> --due <date> [--role <role>]` | Start an Application at found, before it is evaluated |
+| `application move <id> <job> <stage> [--next <step> --due <date>] [--date <date>] [--round N] [--outcome <outcome>] [--note <text>]` | Move an Application to a later Stage and record the date |
+| `application update <id> <job> [--next <step>] [--due <date>]` | Change an open Application's next step or due date |
+| `application show <id> <job>` / `application list [<id>] [--role] [--job] [--company] [--stage] [--open]` | Show one Application with its timeline; list Applications |
+| `application overdue` | List open Applications past their due date, across all Candidates |
+| `application progress [--by candidate\|role\|job\|company]` | Count Applications per Stage, with overdue follow-ups and outcomes |
+| `application sync` | Create `status.yml` for evaluated Applications that have none |
 | `resume plan <id> <job>` | Show what an Application's resumes start from: the Role profile, the Evaluation's evidence, what to leave out, the usable Facts and the Glossary |
 | `resume save <id> <job> [--replace]` | Write `resume.zh.md` and `resume.en.md` from JSON or YAML on stdin and print both to PDF; nothing is written if any check fails |
 | `resume pdf <id> <job>` | Check both resumes and print them to PDF again, after editing them by hand |
-| `validate [<id>]` | Check `taxonomy.yml`, Candidate folders (with their Roles, Evaluations and resumes) and Job snapshots |
+| `validate [<id>]` | Check `taxonomy.yml`, Candidate folders (with their Roles, Evaluations, resumes and Applications) and Job snapshots |
 | `index` | Delete and rebuild `index.sqlite` |
 | `search candidates` / `search facts` | Filter the Index (see Search) |
 | `query "<SELECT ...>"` | Run a read-only SQL query on the Index |
@@ -77,7 +84,7 @@ Searches rebuild the Index first when any file changed. Run `validate` after edi
       role.yml                     Role: title, level, industries, priority, state, requirements
       profile.md                   Role profile: positioning, evidence, gaps
     applications/<job-id>/
-      status.yml                   stage, timeline, next step, due date
+      status.yml                   Application: Role, Stage, next step, due date, dated timeline
       evaluation.md                Evaluation: Role, fit score, reasons, gaps and risks, Success rating
       feedback.md                  feedback log and fixes
       resume.zh.md  resume.zh.pdf  Tailored resume in Chinese: Markdown citing Facts, and its PDF
@@ -272,6 +279,24 @@ The script writes the name, location and contact from `profile.yml`, company, ti
 
 The PDFs are A4 and printed by a headless Chrome, Chromium or Edge with a throwaway profile, from local files only. The Chinese PDF uses the first installed of Noto Sans TC, Noto Sans CJK TC, PingFang TC, Microsoft JhengHei and Heiti TC. Ligatures are turned off, and characters that the PDF's text layer records as Kangxi radicals (⼩ for 小) are mapped back to the ideographs, so copied text and applicant tracking systems read the same words; any left are reported.
 
+**status.yml**: one Application, written by the script.
+
+```yaml
+job: j-yourator-39119
+role: senior-backend-engineer   # the Role it is under; null when no Role fits
+stage: interview                # found | evaluated | preparing | applied | interview | offer | closed
+round: 2                        # only at interview
+next_step: Prepare the system design round   # every open Application
+due: 2026-11-20
+timeline:                       # one entry per Stage change, oldest first
+  - {stage: evaluated, date: 2026-11-08}
+  - {stage: applied, date: 2026-11-10, note: Applied on Yourator}
+  - {stage: interview, round: 1, date: 2026-11-12}
+  - {stage: interview, round: 2, date: 2026-11-18}
+```
+
+A closed Application has `outcome` (hired, declined, rejected or withdrawn) on the Application and its last timeline entry, and no `next_step` or `due`. `role` matches the Application's Evaluation.
+
 ## Workflows
 
 ### Sort what the user gives
@@ -355,7 +380,7 @@ Each Evaluation compares one Job snapshot with one Candidate under the Role that
 2. **Choose the Role** that fits the Job by its title, level and requirements, not by Tag counts alone. When no Role fits, evaluate against all of the Candidate's Facts and leave `role` out. When the Role's profile is stale, offer to rebuild it first.
 3. **Match**: `evaluation match <job> <id>` lists the Facts that share a Tag with each requirement, the Job's and the Candidate's salary, location and work mode, and the achievement targets. Start from the Role profile's evidence, judge each requirement against the posting's wording, and look for other Facts that support it.
 4. **Hard requirements**: mark only must-haves the posting states as required: a degree, minimum years, a certificate or a language. For `years`, cite the experience Facts that count toward it. Use `met: false` only when Facts show the requirement is not met. Every other requirement counts toward skill overlap.
-5. **Save**: pipe the Evaluation to `evaluation save <id> <job>`. When Facts change, evaluate again with `--replace`.
+5. **Save**: pipe the Evaluation to `evaluation save <id> <job>`. It starts the Application at evaluated, or moves it there from found, with the next step "Decide whether to apply" due in seven days; change it with `application update` when the user gives a better one. When Facts change, evaluate again with `--replace`; this keeps the Application's Stage and updates its Role.
 6. **Report** the Success rating with its reasons, the gaps with how to close them, and the risks. Ask the questions the gaps need and save the answers as in Follow-up questions.
 7. **No fitting Role**: offer to create a Role from the Job: its title (add it to `glossary.yml`), requirements from its must-haves and nice-to-haves with their Tags, `origin: job` and the Job id. Run `role new` only when the user agrees.
 8. **Refine Roles**: when `evaluation save` reports proposed changes, run `role refine <id> <role>`. It proposes Tags that two or more Jobs evaluated under the Role require and no requirement has (a must-have when at least half of those Jobs list it as one), and assumed or Job requirements those Jobs also ask for. Show them to the user, apply the accepted ones with `--accept`, then rebuild the Role profile.
@@ -364,12 +389,32 @@ Each Evaluation compares one Job snapshot with one Candidate under the Role that
 
 Write a Chinese and an English resume for an Application worth pursuing, after its Evaluation.
 
-1. **Check**: the Application needs an Evaluation made under a Role, and that Role's profile must be current; `resume plan` says which is missing. An Evaluation without a Role needs a Role created from the Job first (Evaluate Jobs, step 7). Add any company, title, school or location still missing from `glossary.yml`, and `contact` and `name_en` to `profile.yml` if the user gives them.
+1. **Check**: when the user decides to apply, move the Application to preparing (see Track Applications). It needs an Evaluation made under a Role, and that Role's profile must be current; `resume plan` says which is missing. An Evaluation without a Role needs a Role created from the Job first (Evaluate Jobs, step 7). Add any company, title, school or location still missing from `glossary.yml`, and `contact` and `name_en` to `profile.yml` if the user gives them.
 2. **Plan**: `resume plan <id> <job>` shows the Role profile's positioning and the order of its evidence, the Facts the Evaluation cites for each Job requirement, what to leave out, every usable Fact by kind, and the Glossary.
 3. **Write**: start from the positioning and the evidence order, then reorder and rewrite the Facts for this Job: the most relevant first, the Job's wording where the Facts support it. Write each line in both languages, one claim per line, with the Facts it comes from. Use only what the cited Facts say: no new numbers, titles, dates or skills. Requirements the Candidate lacks stay in the Evaluation as gaps.
 4. **Save**: pipe the resume to `resume save <id> <job>`; it writes both Markdown files and PDFs. Use `--replace` to write them again.
 5. **Hand edits**: after the user edits a Markdown file, run `resume pdf <id> <job>`.
 6. **Report** the four files, and remind the user that the resumes leave out the gaps listed in the Evaluation.
+
+### Track Applications
+
+An Application is one Candidate × Job pair. When you start working with the user, run `application overdue` and raise what is late.
+
+| Stage | Meaning | How it gets there |
+|---|---|---|
+| found | Picked up from a Listing, not evaluated | `application new` |
+| evaluated | Evaluation written | `evaluation save` |
+| preparing | Decided to apply; preparing the resume and materials | `application move` |
+| applied | Application sent | `application move` |
+| interview | Each round recorded separately | `application move`; the next round each time, or `--round` |
+| offer | Offer received | `application move` |
+| closed | Hired, declined, rejected or withdrawn | `application move` with `--outcome` |
+
+- Stages only move forward and may skip ahead, for a Job the user already applied to. A closed Application does not move.
+- Each move records its date: today, or `--date` for something that already happened, never in the future or before the last move. Add a short `--note` when it helps.
+- Every move to an open Stage takes the next step and its due date from the user, or a date you propose and they accept. When a step is done without a Stage change, use `application update`.
+- `application overdue` lists every open Application whose due date has passed, across all Candidates. `application progress --by candidate`, `role`, `job` or `company` counts them per Stage; Roles are counted per Candidate, and companies by the name in the Job snapshot.
+- When `validate` reports an evaluated Application with no `status.yml`, run `application sync`; it starts each one at evaluated, on the date of its Evaluation.
 
 ### Search
 
@@ -377,7 +422,7 @@ Write a Chinese and an English resume for an Application worth pursuing, after i
 - `search candidates` also takes `--role` (an active Role whose title, in either language, or folder name contains the text), `--requirement-tag` and `--no-must-gaps` (the Role's profile is built and no must-have is `missing` or `to-confirm`). Together they apply to the same Role: "Candidates targeting data engineer with no must-have gaps" is `search candidates --role "data engineer" --no-must-gaps`.
 - `search facts` with `--candidate`, `--tag`, `--kind`, `--evidence`, `--origin`, `--state`, `--since <year>` and `--text`.
 - For a one-sentence request, turn it into these filters. For example, "Candidates with Python and finance background and 5+ years of experience" is `search candidates --tag python --industry finance --min-years 5`.
-- For anything the filters cannot express, use `query` on the Index tables: `candidates`, `sources`, `facts`, `fact_tags`, `fact_sources`, `tags`, `tag_terms`, `questions`, `roles`, `role_requirements`, `role_requirement_tags`, `role_evidence`, `role_gaps`, `evaluations`, `evaluation_gaps`, and the view `candidate_tags` (Tags on active, sourced Facts).
+- For anything the filters cannot express, use `query` on the Index tables: `candidates`, `sources`, `facts`, `fact_tags`, `fact_sources`, `tags`, `tag_terms`, `questions`, `roles`, `role_requirements`, `role_requirement_tags`, `role_evidence`, `role_gaps`, `evaluations`, `evaluation_gaps`, `applications`, `application_timeline`, and the view `candidate_tags` (Tags on active, sourced Facts).
 
 ### Read Jobs
 
@@ -420,9 +465,3 @@ The script names itself in its User-Agent and follows robots.txt. When a site re
 9. **LinkedIn by hand only.** Read LinkedIn only from pages the user has open in their signed-in browser or text they paste. Never scrape it in bulk. If any site shows a CAPTCHA or sign-in wall, ask the user to handle it or paste the content.
 10. **Read job sites politely.** Follow robots.txt, identify the script honestly, and never work around a refusal or bot check.
 11. **Two resumes per job.** Write a Chinese and an English version; use `glossary.yml` so names are translated the same way every time.
-
-## Application stages
-
-found → evaluated → preparing → applied → interview (round N) → offer → closed (hired / declined / rejected / withdrawn)
-
-Record the date of every stage change, and keep a next step with a due date on every open application.

@@ -88,7 +88,11 @@ RUBRIC = (  # dimension, weight in percent, label
 )
 RATINGS = ("high", "medium", "low")
 RATING_FLOORS = (75, 55, 0)  # lowest fit score for each rating
-INDEX_VERSION = 1  # raise when SCHEMA changes, so existing indexes are rebuilt
+INDEX_VERSION = 2  # raise when SCHEMA changes, so existing indexes are rebuilt
+STAGES = ("found", "evaluated", "preparing", "applied", "interview", "offer", "closed")
+OUTCOMES = ("hired", "declined", "rejected", "withdrawn")
+STATUS_ORDER = ("job", "role", "stage", "round", "outcome", "next_step", "due", "timeline")
+DECIDE_STEP, DECIDE_DAYS = "Decide whether to apply", 7  # the next step an Evaluation leaves
 RESUME_LANGS = ("zh", "en")
 RESUME_HEADINGS = {
     "zh": {"experience": "工作經歷", "projects": "專案", "education": "學歷", "certificates": "證照", "skills": "技能"},
@@ -624,6 +628,17 @@ def validate_candidate(folder: Path, known_tags: set) -> list:
             err(f"resume {jid}: {path.name} must be resume.zh.md or resume.en.md")
             continue
         errors.extend(f"{name}: {e}" for e in check_resume(path, lang, by_id))
+    for jid, path in application_dirs(folder):
+        if not (path / "status.yml").exists():
+            if (path / "evaluation.md").exists() or list(path.glob("resume.*")):
+                err(f"application {jid}: status.yml is missing; run application sync")
+            continue
+        try:
+            status = read_yaml(path / "status.yml", {})
+        except HHError as exc:
+            err(str(exc))
+            continue
+        errors.extend(f"{name}: {e}" for e in check_status(status, jid, folder))
     return errors
 
 
@@ -651,6 +666,9 @@ CREATE TABLE role_gaps (candidate_id TEXT, role TEXT, requirement TEXT, kind TEX
 CREATE TABLE evaluations (candidate_id TEXT, job_id TEXT, role TEXT, evaluated TEXT, score INTEGER,
   rating TEXT, gate TEXT, PRIMARY KEY (candidate_id, job_id));
 CREATE TABLE evaluation_gaps (candidate_id TEXT, job_id TEXT, requirement TEXT, kind TEXT);
+CREATE TABLE applications (candidate_id TEXT, job_id TEXT, role TEXT, company TEXT, title TEXT, stage TEXT,
+  round INTEGER, outcome TEXT, next_step TEXT, due TEXT, PRIMARY KEY (candidate_id, job_id));
+CREATE TABLE application_timeline (candidate_id TEXT, job_id TEXT, stage TEXT, round INTEGER, date TEXT, note TEXT);
 CREATE VIEW candidate_tags AS
   SELECT DISTINCT f.candidate_id, t.tag FROM facts f
   JOIN fact_tags t ON t.candidate_id = f.candidate_id AND t.fact_id = f.id
@@ -728,6 +746,21 @@ def rebuild_index(root: Path) -> dict:
             con.executemany("INSERT INTO evaluation_gaps VALUES (?, ?, ?, ?)",
                             [(cid, jid, g.get("requirement"), g.get("kind")) for g in ev.get("gaps") or []])
             counts["evaluations"] += 1
+        for jid, path in application_dirs(folder):
+            if not (path / "status.yml").exists():
+                continue
+            status = read_yaml(path / "status.yml", {})
+            job_path = root / "jobs" / f"{jid}.md"
+            job = read_job(job_path)[0] if job_path.exists() else {}
+            con.execute("INSERT INTO applications VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
+                cid, jid, status.get("role"), job.get("company"), job.get("title"), status.get("stage"),
+                status.get("round"), status.get("outcome"), status.get("next_step"),
+                None if status.get("due") is None else str(status["due"]),
+            ))
+            con.executemany("INSERT INTO application_timeline VALUES (?, ?, ?, ?, ?, ?)",
+                            [(cid, jid, e.get("stage"), e.get("round"), str(e.get("date")), e.get("note"))
+                             for e in status.get("timeline") or []])
+            counts["applications"] += 1
         counts["candidates"] += 1
         counts["facts"] += len(facts)
     con.execute(f"PRAGMA user_version = {INDEX_VERSION}")
@@ -742,15 +775,15 @@ def index_stale(root: Path) -> bool:
     if not index.exists():
         return True
     built = index.stat().st_mtime
-    paths = [root / "taxonomy.yml", root / "candidates"]
+    paths = [root / "taxonomy.yml", root / "candidates", root / "jobs", *job_files(root)]
     for _, folder in candidate_dirs(root):
         paths += [folder, folder / "profile.yml", folder / "sources.yml", folder / "facts.yml", folder / "imports",
                   folder / "glossary.yml", folder / "roles", folder / "applications"]
         paths += list((folder / "imports").glob("*.md"))
         for _, path in role_dirs(folder):
             paths += [path, path / "role.yml", path / "profile.md"]
-        for _, path in evaluation_files(folder):
-            paths += [path.parent, path]
+        for _, path in application_dirs(folder):
+            paths += [path, path / "evaluation.md", path / "status.yml"]
     if any(p.exists() and p.stat().st_mtime > built for p in paths):
         return True
     con = sqlite3.connect(index.as_uri() + "?mode=ro", uri=True)
@@ -1613,6 +1646,134 @@ def render_period(value, lang: str) -> str:
     return f"{start} – {('至今' if lang == 'zh' else 'Present') if end in ('present', '') else end}"
 
 
+# ---------------------------------------------------------------- applications
+
+
+def application_dirs(folder: Path) -> list:
+    base = folder / "applications"
+    return sorted((d.name, d) for d in base.iterdir() if d.is_dir()) if base.exists() else []
+
+
+def parse_date(value, label: str) -> dt.date:
+    try:
+        if not DATE.match(str(value)):
+            raise ValueError
+        return dt.date.fromisoformat(str(value))
+    except ValueError:
+        raise HHError(f"{label} must be a date such as 2026-01-31, not {value!r}") from None
+
+
+def write_status(path: Path, status: dict) -> None:
+    write_yaml(path, {key: status[key] for key in STATUS_ORDER if key in status})
+
+
+def load_status(folder: Path, jid: str) -> tuple:
+    path = folder / "applications" / jid / "status.yml"
+    if not path.exists():
+        raise HHError(f"{folder.name} has no Application for {jid}; start one with application new or evaluation save")
+    status = read_yaml(path, {})
+    if not isinstance(status, dict):
+        raise HHError(f"{path} must be a mapping")
+    return path, status
+
+
+def record_evaluated(folder: Path, jid: str, slug) -> dict:
+    """Bring the Application in step with its Evaluation; returns its status."""
+    path = folder / "applications" / jid / "status.yml"
+    status = read_yaml(path, {}) if path.exists() else {}
+    decide = {"next_step": DECIDE_STEP, "due": (dt.date.today() + dt.timedelta(days=DECIDE_DAYS)).isoformat()}
+    if not status:
+        status = {"job": jid, "role": slug, "stage": "evaluated", **decide,
+                  "timeline": [{"stage": "evaluated", "date": today()}]}
+    else:
+        status["role"] = slug
+        if status.get("stage") == "found":
+            status.update(stage="evaluated", **decide)
+            status["timeline"] = list(status.get("timeline") or []) + [{"stage": "evaluated", "date": today()}]
+    write_status(path, status)
+    return status
+
+
+def check_status(status, jid: str, folder: Path) -> list:
+    where = f"application {jid}"
+    if not isinstance(status, dict):
+        return [f"{where}: status.yml must be a mapping"]
+    errors = []
+    root = folder.parent.parent
+    if status.get("job") != jid:
+        errors.append(f"{where}: job must be {jid}, its folder name")
+    if not (root / "jobs" / f"{jid}.md").exists():
+        errors.append(f"{where}: Job {jid} has no snapshot in jobs/")
+    role = status.get("role")
+    if role is not None and not (folder / "roles" / str(role) / "role.yml").exists():
+        errors.append(f"{where}: no Role {role}")
+    evaluation = folder / "applications" / jid / "evaluation.md"
+    if evaluation.exists():
+        try:
+            if read_job(evaluation)[0].get("role") != role:
+                errors.append(f"{where}: role must be the Role of its Evaluation")
+        except HHError:
+            pass  # reported with the Evaluation
+    stage = status.get("stage")
+    timeline = status.get("timeline")
+    if stage not in STAGES:
+        return errors + [f"{where}: stage must be one of {', '.join(STAGES)}"]
+    if not isinstance(timeline, list) or not timeline:
+        return errors + [f"{where}: timeline must list every Stage change with its date"]
+    previous, last_round, last_rank = None, 0, 0
+    for n, entry in enumerate(timeline, 1):
+        label = f"{where}: timeline {n}"
+        if not isinstance(entry, dict) or entry.get("stage") not in STAGES:
+            errors.append(f"{label}: stage must be one of {', '.join(STAGES)}")
+            continue
+        try:
+            day = parse_date(entry.get("date"), f"{label}: date")
+        except HHError as exc:
+            errors.append(str(exc))
+            continue
+        if previous and day < previous:
+            errors.append(f"{label}: dates must not go backwards")
+        rank = STAGES.index(entry["stage"])
+        if rank < last_rank:
+            errors.append(f"{label}: Stages must only move forward")
+        previous, last_rank = day, rank
+        if entry["stage"] == "interview":
+            if not isinstance(entry.get("round"), int) or entry["round"] <= last_round:
+                errors.append(f"{label}: an interview needs a round number higher than the last")
+            else:
+                last_round = entry["round"]
+        elif "round" in entry:
+            errors.append(f"{label}: only an interview has a round")
+    last = timeline[-1] if isinstance(timeline[-1], dict) else {}
+    if last.get("stage") != stage:
+        errors.append(f"{where}: stage must be the last Stage in its timeline")
+    if stage == "interview" and status.get("round") != last.get("round"):
+        errors.append(f"{where}: round must be the round of the last interview")
+    if stage != "interview" and "round" in status:
+        errors.append(f"{where}: only an Application at interview has a round")
+    if any(isinstance(e, dict) and e.get("stage") == "evaluated" for e in timeline) and not evaluation.exists():
+        errors.append(f"{where}: its timeline says evaluated, but it has no evaluation.md")
+    if stage == "closed":
+        if status.get("outcome") not in OUTCOMES:
+            errors.append(f"{where}: a closed Application records its outcome: {', '.join(OUTCOMES)}")
+        if "next_step" in status or "due" in status:
+            errors.append(f"{where}: a closed Application has no next step or due date")
+    else:
+        if "outcome" in status:
+            errors.append(f"{where}: only a closed Application has an outcome")
+        if not str(status.get("next_step") or "").strip():
+            errors.append(f"{where}: an open Application needs a next step")
+        try:
+            parse_date(status.get("due"), f"{where}: due")
+        except HHError as exc:
+            errors.append(str(exc))
+    return errors
+
+
+def stage_label(stage, number) -> str:
+    return f"interview round {number}" if stage == "interview" else str(stage)
+
+
 # ---------------------------------------------------------------- commands
 
 
@@ -1706,6 +1867,16 @@ def cmd_candidate_show(args):
         written = [lang for lang in RESUME_LANGS if (path.parent / f"resume.{lang}.md").exists()]
         print(f"  {jid}: {ev.get('rating')} ({ev.get('score')}) under {ev.get('role') or 'no Role'}, {ev.get('evaluated')}"
               + (f"; resumes: {', '.join(written)}" if written else ""))
+    statuses = [(jid, read_yaml(path / "status.yml", {})) for jid, path in application_dirs(folder)
+                if (path / "status.yml").exists()]
+    print(f"Applications: {len(statuses)}")
+    for jid, status in statuses:
+        if status.get("stage") == "closed":
+            print(f"  {jid}: closed ({status.get('outcome')})")
+        else:
+            late = "  OVERDUE" if str(status.get("due")) < today() else ""
+            print(f"  {jid}: {stage_label(status.get('stage'), status.get('round'))}; next: {status.get('next_step')} "
+                  f"by {status.get('due')}{late}")
 
 
 def move_candidate(args, to_archive: bool):
@@ -1929,7 +2100,7 @@ def cmd_index(args):
     root = data_dir()
     counts = rebuild_index(root)
     print(f"Rebuilt {root / 'index.sqlite'}: {counts['candidates']} Candidates, {counts['facts']} Facts, "
-          f"{counts['roles']} Roles, {counts['evaluations']} Evaluations.")
+          f"{counts['roles']} Roles, {counts['evaluations']} Evaluations, {counts['applications']} Applications.")
 
 
 def cmd_job_listing(args):
@@ -2582,8 +2753,14 @@ def cmd_evaluation_save(args):
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(render_evaluation(front, job, reqs, role, by_id, profile, basis), encoding="utf-8")
     print(f"{args.job}  {target}")
+    status = record_evaluated(folder, args.job, slug or None)
     print(f"Success rating: {rating} · fit score {score} · hard requirements {gate} · "
           f"{len(gaps)} {'gap' if len(gaps) == 1 else 'gaps'} ({len(must_gaps)} on must-haves missing or unconfirmed)")
+    if status.get("stage") == "closed":
+        print(f"Application: closed ({status.get('outcome')})")
+    else:
+        print(f"Application: {stage_label(status.get('stage'), status.get('round'))}; next: {status.get('next_step')} "
+              f"by {status.get('due')}")
     if not role:
         print("No Role fits: offer to create one from this Job (see Evaluate Jobs in SKILL.md).")
         return
@@ -2945,6 +3122,222 @@ def cmd_resume_pdf(args):
         print(line)
 
 
+def cmd_application_new(args):
+    root = data_dir()
+    folder = find_candidate(root, args.id, archived=False)
+    if not (root / "jobs" / f"{args.job}.md").exists():
+        raise HHError(f"Job {args.job} has no snapshot in jobs/; save it with job save first")
+    base = folder / "applications" / args.job
+    if (base / "status.yml").exists():
+        raise HHError(f"{folder.name} already has an Application for {args.job}")
+    if (base / "evaluation.md").exists():
+        raise HHError(f"{args.job} is already evaluated; run application sync")
+    if args.role:
+        role = load_role(find_role(folder, args.role))
+        if role.get("state") == "dropped":
+            raise HHError(f"the Role {args.role} is dropped")
+    if not args.next.strip():
+        raise HHError("--next must say what happens next")
+    parse_date(args.due, "--due")
+    base.mkdir(parents=True, exist_ok=True)
+    write_status(base / "status.yml", {
+        "job": args.job, "role": args.role, "stage": "found", "next_step": args.next, "due": args.due,
+        "timeline": [{"stage": "found", "date": today()}],
+    })
+    print(f"{args.job}  found; next: {args.next} by {args.due}")
+
+
+def cmd_application_move(args):
+    root = data_dir()
+    folder = find_candidate(root, args.id, archived=False)
+    path, status = load_status(folder, args.job)
+    current, target = status.get("stage"), args.stage
+    if current == "closed":
+        raise HHError(f"{args.job} is closed ({status.get('outcome')}); a closed Application does not move")
+    if STAGES.index(target) < STAGES.index(current) or (target == current and target != "interview"):
+        raise HHError(f"{args.job} is at {stage_label(current, status.get('round'))}; Stages only move forward")
+    timeline = list(status.get("timeline") or [])
+    day = parse_date(args.date or today(), "--date")
+    if day > dt.date.today():
+        raise HHError("--date cannot be in the future; put what is planned in --next and --due")
+    if timeline and day < parse_date(timeline[-1].get("date"), "the last timeline date"):
+        raise HHError(f"--date cannot be before the last Stage change on {timeline[-1].get('date')}")
+    entry = {"stage": target, "date": day.isoformat()}
+    if target == "interview":
+        last = max((e.get("round") or 0 for e in timeline if e.get("stage") == "interview"), default=0)
+        number = args.round if args.round is not None else last + 1
+        if number <= last:
+            raise HHError(f"--round must be higher than the last round, {last}")
+        entry["round"] = status["round"] = number
+    else:
+        if args.round is not None:
+            raise HHError("--round is only for interviews")
+        status.pop("round", None)
+    if target == "closed":
+        if not args.outcome:
+            raise HHError(f"closing needs --outcome: {', '.join(OUTCOMES)}")
+        if args.next or args.due:
+            raise HHError("a closed Application has no next step or due date")
+        entry["outcome"] = status["outcome"] = args.outcome
+        status.pop("next_step", None)
+        status.pop("due", None)
+    else:
+        if args.outcome:
+            raise HHError("--outcome is only for closing")
+        if not (args.next or "").strip() or not args.due:
+            raise HHError("an open Application needs --next and --due")
+        if parse_date(args.due, "--due") < day:
+            raise HHError("--due cannot be before the day of this Stage change")
+        status.update(next_step=args.next, due=args.due)
+    if args.note:
+        entry["note"] = args.note
+    status["stage"] = target
+    status["timeline"] = timeline + [entry]
+    write_status(path, status)
+    label = stage_label(target, status.get("round"))
+    print(f"{args.job}  {label} on {entry['date']}"
+          + (f" ({args.outcome})" if target == "closed" else f"; next: {args.next} by {args.due}"))
+
+
+def cmd_application_update(args):
+    root = data_dir()
+    folder = find_candidate(root, args.id, archived=False)
+    path, status = load_status(folder, args.job)
+    if status.get("stage") == "closed":
+        raise HHError(f"{args.job} is closed ({status.get('outcome')}); it has no next step")
+    if args.next is None and args.due is None:
+        raise HHError("give --next, --due or both")
+    if args.next is not None:
+        if not args.next.strip():
+            raise HHError("--next must say what happens next")
+        status["next_step"] = args.next
+    if args.due is not None:
+        parse_date(args.due, "--due")
+        status["due"] = args.due
+    write_status(path, status)
+    print(f"{args.job}  next: {status.get('next_step')} by {status.get('due')}")
+
+
+def cmd_application_show(args):
+    root = data_dir()
+    folder = find_candidate(root, args.id, archived=False)
+    _, status = load_status(folder, args.job)
+    job_path = root / "jobs" / f"{args.job}.md"
+    job = read_job(job_path)[0] if job_path.exists() else {}
+    print(f"{args.job}  {job.get('title', '?')} · {job.get('company', '?')}")
+    print(f"Role: {status.get('role') or 'none'}")
+    print(f"Stage: {stage_label(status.get('stage'), status.get('round'))}"
+          + (f" ({status.get('outcome')})" if status.get("outcome") else ""))
+    if status.get("stage") != "closed":
+        late = "  OVERDUE" if str(status.get("due")) < today() else ""
+        print(f"Next step: {status.get('next_step')} by {status.get('due')}{late}")
+    print("Timeline:")
+    for entry in status.get("timeline") or []:
+        extra = "".join(f" ({entry[k]})" for k in ("outcome", "note") if entry.get(k))
+        print(f"  {entry.get('date')}  {stage_label(entry.get('stage'), entry.get('round'))}{extra}")
+    base = folder / "applications" / args.job
+    files = sorted(p.name for p in base.iterdir() if p.name != "status.yml" and not p.name.startswith("."))
+    print("Files: " + (", ".join(files) or "none"))
+
+
+def print_application(row, extra: str = "") -> None:
+    cid, name, jid, role, company, title, stage, number, outcome, next_step, due = row
+    state = f"closed ({outcome})" if stage == "closed" else f"{stage_label(stage, number)}; next: {next_step} by {due}"
+    print(f"{cid} {name}  {jid}  {state}{extra}  {role or 'no Role'}  {title or '?'} · {company or '?'}")
+
+
+APPLICATION_COLUMNS = ("SELECT a.candidate_id, c.name, a.job_id, a.role, a.company, a.title, a.stage, a.round, a.outcome, "
+                       "a.next_step, a.due FROM applications a JOIN candidates c ON c.id = a.candidate_id")
+
+
+def cmd_application_list(args):
+    root = data_dir()
+    con = open_index(root)
+    sql, params = APPLICATION_COLUMNS + " WHERE 1 = 1", []
+    if args.id:
+        sql += " AND a.candidate_id = ?"
+        params.append(candidate_id(args.id))
+    if args.job:
+        sql += " AND a.job_id = ?"
+        params.append(args.job)
+    if args.role:
+        sql += " AND a.role LIKE ?"
+        params.append(f"%{args.role}%")
+    if args.company:
+        sql += " AND a.company LIKE ?"
+        params.append(f"%{args.company}%")
+    if args.stage:
+        sql += " AND a.stage = ?"
+        params.append(args.stage)
+    if args.open:
+        sql += " AND a.stage != 'closed'"
+    rows = con.execute(sql + " ORDER BY a.candidate_id, a.due IS NULL, a.due, a.job_id", params).fetchall()
+    for row in rows:
+        print_application(row)
+    print(f"{len(rows)} {'Application' if len(rows) == 1 else 'Applications'}" if rows else "No Applications.")
+
+
+def cmd_application_overdue(args):
+    root = data_dir()
+    con = open_index(root)
+    rows = con.execute(APPLICATION_COLUMNS + " WHERE a.stage != 'closed' AND a.due < ? ORDER BY a.due, a.candidate_id",
+                       (today(),)).fetchall()
+    for row in rows:
+        days = (dt.date.today() - dt.date.fromisoformat(row[10])).days
+        print_application(row, f"  ({days} {'day' if days == 1 else 'days'} overdue)")
+    print(f"{len(rows)} overdue" if rows else "Nothing is overdue.")
+
+
+def cmd_application_progress(args):
+    root = data_dir()
+    con = open_index(root)
+    groups = {
+        "candidate": "a.candidate_id || ' ' || c.name",
+        "role": "a.candidate_id || ' ' || coalesce(a.role, '(no Role)')",
+        "job": "a.job_id || ' ' || coalesce(a.title, '?') || ' · ' || coalesce(a.company, '?')",
+        "company": "coalesce(a.company, '?')",
+    }
+    rows = con.execute(f"SELECT {groups[args.by]}, a.stage, a.outcome, a.due FROM applications a "
+                       "JOIN candidates c ON c.id = a.candidate_id").fetchall()
+    if not rows:
+        print("No Applications.")
+        return
+    table, now = {}, today()
+    for group, stage, outcome, due in rows + [("Total", s, o, d) for _, s, o, d in rows]:
+        entry = table.setdefault(group, {"stages": Counter(), "outcomes": Counter(), "overdue": 0})
+        entry["stages"][stage] += 1
+        if outcome:
+            entry["outcomes"][outcome] += 1
+        if stage != "closed" and due and str(due) < now:
+            entry["overdue"] += 1
+    print(f"| {args.by.capitalize()} | " + " | ".join(STAGES) + " | overdue | outcomes |")
+    print("|---|" + "---|" * (len(STAGES) + 2))
+    for group in sorted(g for g in table if g != "Total") + ["Total"]:
+        entry = table[group]
+        outcomes = ", ".join(f"{k} {v}" for k, v in sorted(entry["outcomes"].items())) or "-"
+        print(f"| {group} | " + " | ".join(str(entry["stages"][s]) for s in STAGES) + f" | {entry['overdue']} | {outcomes} |")
+
+
+def cmd_application_sync(args):
+    root = data_dir()
+    created = 0
+    for archived in (False, True):
+        for cid, folder in candidate_dirs(root, archived):
+            for jid, path in application_dirs(folder):
+                if (path / "status.yml").exists() or not (path / "evaluation.md").exists():
+                    continue
+                evaluation = read_job(path / "evaluation.md")[0]
+                due = (dt.date.today() + dt.timedelta(days=DECIDE_DAYS)).isoformat()
+                write_status(path / "status.yml", {
+                    "job": jid, "role": evaluation.get("role"), "stage": "evaluated", "next_step": DECIDE_STEP, "due": due,
+                    "timeline": [{"stage": "evaluated", "date": str(evaluation.get("evaluated"))}],
+                })
+                created += 1
+                print(f"{cid}  {jid}  evaluated; next: {DECIDE_STEP} by {due}")
+    print(f"Created {created} status.yml {'file' if created == 1 else 'files'}." if created
+          else "Every evaluated Application has a status.yml.")
+
+
 def matched_facts(con, cid: str, tag: str) -> list:
     rows = con.execute(
         "SELECT f.id FROM facts f JOIN fact_tags t ON t.candidate_id = f.candidate_id AND t.fact_id = f.id "
@@ -3209,6 +3602,52 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--job")
     p.add_argument("--rating", choices=RATINGS)
     p.set_defaults(func=cmd_evaluation_list)
+
+    app = sub.add_parser("application", help="track Applications: Stages, next steps, overdue follow-ups and progress")
+    asub = app.add_subparsers(dest="action", required=True)
+    p = asub.add_parser("new", help="start an Application at found, before it is evaluated")
+    p.add_argument("id")
+    p.add_argument("job")
+    p.add_argument("--role")
+    p.add_argument("--next", required=True, help="the next step")
+    p.add_argument("--due", required=True, help="its due date, such as 2026-01-31")
+    p.set_defaults(func=cmd_application_new)
+    p = asub.add_parser("move", help="move an Application to a later Stage and record the date")
+    p.add_argument("id")
+    p.add_argument("job")
+    p.add_argument("stage", choices=STAGES[2:])
+    p.add_argument("--next", help="the next step; required unless closing")
+    p.add_argument("--due", help="its due date; required unless closing")
+    p.add_argument("--date", help="the day the Stage changed; today when left out")
+    p.add_argument("--round", type=int, help="interview round; the next round when left out")
+    p.add_argument("--outcome", choices=OUTCOMES, help="required when closing")
+    p.add_argument("--note")
+    p.set_defaults(func=cmd_application_move)
+    p = asub.add_parser("update", help="change an open Application's next step or due date")
+    p.add_argument("id")
+    p.add_argument("job")
+    p.add_argument("--next")
+    p.add_argument("--due")
+    p.set_defaults(func=cmd_application_update)
+    p = asub.add_parser("show", help="show one Application's Stage, next step, timeline and files")
+    p.add_argument("id")
+    p.add_argument("job")
+    p.set_defaults(func=cmd_application_show)
+    p = asub.add_parser("list", help="list Applications")
+    p.add_argument("id", nargs="?")
+    p.add_argument("--role", help="Role folder name, or part of it")
+    p.add_argument("--job")
+    p.add_argument("--company", help="company name, or part of it")
+    p.add_argument("--stage", choices=STAGES)
+    p.add_argument("--open", action="store_true", help="only Applications that are not closed")
+    p.set_defaults(func=cmd_application_list)
+    asub.add_parser("overdue", help="list open Applications past their due date, across all Candidates").set_defaults(
+        func=cmd_application_overdue)
+    p = asub.add_parser("progress", help="count Applications per Stage")
+    p.add_argument("--by", choices=("candidate", "role", "job", "company"), default="candidate")
+    p.set_defaults(func=cmd_application_progress)
+    asub.add_parser("sync", help="create status.yml for evaluated Applications that have none").set_defaults(
+        func=cmd_application_sync)
 
     res = sub.add_parser("resume", help="write the Chinese and English resumes of an evaluated Application")
     vsub = res.add_subparsers(dest="action", required=True)

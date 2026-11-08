@@ -87,7 +87,9 @@ uses `j-user-` and a hash of its company and title.
 _Avoid_: JD, position, opening
 
 **Application**:
-One Candidate × Job pair, from the first Evaluation until it is closed.
+One Candidate × Job pair, from when the Job is picked up or first evaluated until
+it is closed. It records its Role, Stage, a dated timeline, and a next step with
+a due date while open.
 _Avoid_: submission, match, pipeline item
 
 **Stage**:
