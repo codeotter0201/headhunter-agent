@@ -72,6 +72,19 @@ JOB_ORDER = (
     "id", "site", "site_id", "url", "title", "company", "location", "salary", "work_mode",
     "employment_type", "posted", "read", "read_with", "must_haves", "nice_to_haves", "duties",
 )
+HARD_KINDS = ("degree", "years", "certificate", "language")
+CONDITIONS = ("salary", "location", "work_mode")
+CONDITION_FITS = {"match": 100, "partial": 50, "mismatch": 0, "unknown": 50}
+RUBRIC = (  # dimension, weight in percent, label
+    ("skills", 35, "Skill overlap"),
+    ("seniority", 20, "Seniority"),
+    ("industry", 20, "Industry and domain"),
+    ("achievements", 15, "Achievement evidence"),
+    ("conditions", 10, "Salary, location, work mode"),
+)
+RATINGS = ("high", "medium", "low")
+RATING_FLOORS = (75, 55, 0)  # lowest fit score for each rating
+INDEX_VERSION = 1  # raise when SCHEMA changes, so existing indexes are rebuilt
 QUESTION_LINE = re.compile(r"^\s*- \[( |x|X)\] (q-\d+):?\s*(.*)$")
 YEAR_MONTH = re.compile(r"^(\d{4})(?:-(\d{2}))?$")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -573,6 +586,14 @@ def validate_candidate(folder: Path, known_tags: set) -> list:
                 err(f"role {slug}: profile.md names the Role {front.get('role')!r}")
             if any(g.get("kind") not in GAP_KINDS for g in front.get("gaps") or [] if isinstance(g, dict)):
                 err(f"role {slug}: gap kinds must be {', '.join(GAP_KINDS)}")
+    fact_ids = {f.get("id") for f in facts if isinstance(f, dict)} if isinstance(facts, list) else set()
+    for jid, path in evaluation_files(folder):
+        try:
+            front, _ = read_job(path)
+        except HHError as exc:
+            err(str(exc))
+            continue
+        errors.extend(f"{name}: {e}" for e in check_evaluation(front, jid, folder, fact_ids))
     return errors
 
 
@@ -597,6 +618,9 @@ CREATE TABLE role_requirements (candidate_id TEXT, role TEXT, id TEXT, kind TEXT
 CREATE TABLE role_requirement_tags (candidate_id TEXT, role TEXT, requirement TEXT, tag TEXT);
 CREATE TABLE role_evidence (candidate_id TEXT, role TEXT, requirement TEXT, fact_id TEXT, why TEXT);
 CREATE TABLE role_gaps (candidate_id TEXT, role TEXT, requirement TEXT, kind TEXT);
+CREATE TABLE evaluations (candidate_id TEXT, job_id TEXT, role TEXT, evaluated TEXT, score INTEGER,
+  rating TEXT, gate TEXT, PRIMARY KEY (candidate_id, job_id));
+CREATE TABLE evaluation_gaps (candidate_id TEXT, job_id TEXT, requirement TEXT, kind TEXT);
 CREATE VIEW candidate_tags AS
   SELECT DISTINCT f.candidate_id, t.tag FROM facts f
   JOIN fact_tags t ON t.candidate_id = f.candidate_id AND t.fact_id = f.id
@@ -665,8 +689,18 @@ def rebuild_index(root: Path) -> dict:
             con.executemany("INSERT INTO role_gaps VALUES (?, ?, ?, ?)",
                             [(cid, slug, g.get("requirement"), g.get("kind")) for g in front.get("gaps") or []])
             counts["roles"] += 1
+        for jid, path in evaluation_files(folder):
+            ev = read_job(path)[0]
+            con.execute("INSERT INTO evaluations VALUES (?, ?, ?, ?, ?, ?, ?)", (
+                cid, jid, ev.get("role"), str(ev.get("evaluated") or ""), ev.get("score"), ev.get("rating"),
+                ev.get("gate"),
+            ))
+            con.executemany("INSERT INTO evaluation_gaps VALUES (?, ?, ?, ?)",
+                            [(cid, jid, g.get("requirement"), g.get("kind")) for g in ev.get("gaps") or []])
+            counts["evaluations"] += 1
         counts["candidates"] += 1
         counts["facts"] += len(facts)
+    con.execute(f"PRAGMA user_version = {INDEX_VERSION}")
     con.commit()
     con.close()
     os.replace(tmp, root / "index.sqlite")
@@ -681,11 +715,19 @@ def index_stale(root: Path) -> bool:
     paths = [root / "taxonomy.yml", root / "candidates"]
     for _, folder in candidate_dirs(root):
         paths += [folder, folder / "profile.yml", folder / "sources.yml", folder / "facts.yml", folder / "imports",
-                  folder / "glossary.yml", folder / "roles"]
+                  folder / "glossary.yml", folder / "roles", folder / "applications"]
         paths += list((folder / "imports").glob("*.md"))
         for _, path in role_dirs(folder):
             paths += [path, path / "role.yml", path / "profile.md"]
-    return any(p.exists() and p.stat().st_mtime > built for p in paths)
+        for _, path in evaluation_files(folder):
+            paths += [path.parent, path]
+    if any(p.exists() and p.stat().st_mtime > built for p in paths):
+        return True
+    con = sqlite3.connect(index.as_uri() + "?mode=ro", uri=True)
+    try:
+        return con.execute("PRAGMA user_version").fetchone()[0] != INDEX_VERSION
+    finally:
+        con.close()
 
 
 def open_index(root: Path) -> sqlite3.Connection:
@@ -1015,6 +1057,80 @@ def check_role(role: dict, slug: str, folder: Path, known_tags: set) -> list:
     return errors
 
 
+def fact_problem(by_id: dict, fid, inferred: bool = False):
+    """Why a Fact cannot be cited as evidence (or, with inferred, under a gap to confirm); None when it can."""
+    fact = by_id.get(fid)
+    if fact is None:
+        return f"unknown Fact {fid}"
+    if fact.get("state") != "active":
+        return f"{fid} is {fact.get('state')}; only active Facts count"
+    if inferred and fact.get("origin") != "inferred":
+        return f"{fid} is sourced; cite it as evidence instead"
+    if not inferred and fact.get("origin") != "sourced":
+        return f"{fid} is inferred; list it under the requirement's gap to confirm"
+    return None
+
+
+def check_evidence(reqs: dict, entries, by_id: dict, errors: list) -> dict:
+    """Map requirement ids to the sourced Facts cited for them, strongest evidence first."""
+    rank = {level: n for n, level in enumerate(EVIDENCE)}
+    evidence = {}
+    for entry in entries or []:
+        rid = entry.get("requirement")
+        if rid not in reqs:
+            errors.append(f"evidence: unknown requirement {rid}")
+            continue
+        cited = []
+        for item in entry.get("facts") or []:
+            if not str(item.get("why") or "").strip():
+                errors.append(f"evidence {rid}: say why {item.get('id')} supports it")
+            problem = fact_problem(by_id, item.get("id"))
+            if problem:
+                errors.append(f"evidence {rid}: {problem}")
+            else:
+                cited.append({"id": item["id"], "why": item.get("why")})
+        cited.sort(key=lambda c: rank.get(str(by_id[c["id"]].get("evidence")), 9))
+        if cited:
+            evidence[rid] = cited
+    return evidence
+
+
+def check_gaps(reqs: dict, evidence: dict, entries, by_id: dict, errors: list, skip=()) -> list:
+    """Work out the gap of every requirement without documented or third-party evidence."""
+    rank = {level: n for n, level in enumerate(EVIDENCE)}
+    given = {g.get("requirement"): g for g in entries or []}
+    gaps = []
+    for rid, req in reqs.items():
+        gap = given.pop(rid, None)
+        if rid in skip:
+            if gap:
+                errors.append(f"gaps: {rid} fails a hard requirement; leave it out of gaps")
+            continue
+        best = min((rank.get(str(by_id[c["id"]].get("evidence")), 9) for c in evidence.get(rid, [])), default=None)
+        if best is not None and best < rank["self-reported"]:
+            if gap:
+                errors.append(f"gaps: {rid} has {EVIDENCE[best]} evidence, so it is not a gap")
+            continue
+        if not gap or not str(gap.get("close") or "").strip():
+            errors.append(f"gaps: {rid} ({req.get('text')}) needs a gap entry saying how to close it")
+            continue
+        if best is not None:
+            kind, linked = "weak-evidence", [c["id"] for c in evidence[rid]]
+        else:
+            linked = []
+            for fid in gap.get("facts") or []:
+                problem = fact_problem(by_id, fid, inferred=True)
+                if problem:
+                    errors.append(f"gap {rid}: {problem}")
+                else:
+                    linked.append(fid)
+            kind = "to-confirm" if linked else "missing"
+        gaps.append({"requirement": rid, "kind": kind, "facts": linked, "close": gap["close"]})
+    for rid in given:
+        errors.append(f"gaps: unknown requirement {rid}")
+    return gaps
+
+
 def role_stale(path: Path, role: dict, facts: list) -> list:
     """Reasons a Role profile is out of date; empty when it is current."""
     profile = path / "profile.md"
@@ -1064,6 +1180,163 @@ def update_strategy_roles(folder: Path) -> None:
     text = text[:match.start()] + section + ("\n" + text[match.end():] if text[match.end():] else "") if match \
         else text.rstrip() + "\n\n" + section
     path.write_text(text, encoding="utf-8")
+
+
+# ---------------------------------------------------------------- evaluations
+
+
+def evaluation_files(folder: Path) -> list:
+    base = folder / "applications"
+    return sorted((p.parent.name, p) for p in base.glob("*/evaluation.md")) if base.exists() else []
+
+
+def job_requirements(job: dict) -> dict:
+    """The Job's requirements keyed by position: must-1, must-2, ... then nice-1, ..."""
+    reqs = {}
+    for key, kind in (("must_haves", "must"), ("nice_to_haves", "nice")):
+        for n, item in enumerate(job.get(key) or [], 1):
+            if isinstance(item, dict):
+                reqs[f"{kind}-{n}"] = {"kind": kind, "text": item.get("text"), "tags": item.get("tags") or [],
+                                       "proposed": item.get("proposed") or []}
+    return reqs
+
+
+def achievement_targets(job: dict, reqs: dict) -> dict:
+    """What achievements are matched against: the Job's duties, or its requirements when it lists none."""
+    duties = job.get("duties") or []
+    if duties:
+        return {f"duty-{n}": str(text) for n, text in enumerate(duties, 1)}
+    return {rid: str(req["text"]) for rid, req in reqs.items()}
+
+
+def evaluation_fact_ids(front: dict) -> set:
+    ids = {c.get("id") for e in front.get("evidence") or [] for c in e.get("facts") or []}
+    ids |= {fid for key in ("gaps", "hard") for e in front.get(key) or [] for fid in e.get("facts") or []}
+    ids |= {a.get("fact") for a in front.get("achievements") or []}
+    return {fid for fid in ids if fid}
+
+
+def check_evaluation(front: dict, jid: str, folder: Path, fact_ids: set) -> list:
+    errors = []
+    where = f"evaluation {jid}"
+    root = folder.parent.parent
+    if front.get("job") != jid:
+        errors.append(f"{where}: job must be {jid}, its folder name")
+    if not (root / "jobs" / f"{jid}.md").exists():
+        errors.append(f"{where}: Job {jid} has no snapshot in jobs/")
+    cid = re.match(r"c-\d+", folder.name)
+    if cid and front.get("candidate") != cid.group(0):
+        errors.append(f"{where}: candidate must be {cid.group(0)}")
+    role = front.get("role")
+    if role is not None and not (folder / "roles" / str(role) / "role.yml").exists():
+        errors.append(f"{where}: no Role {role}")
+    if front.get("rating") not in RATINGS:
+        errors.append(f"{where}: rating must be one of {', '.join(RATINGS)}")
+    score = front.get("score")
+    if not isinstance(score, int) or not 0 <= score <= 100:
+        errors.append(f"{where}: score must be a whole number from 0 to 100")
+    if any(g.get("kind") not in GAP_KINDS for g in front.get("gaps") or [] if isinstance(g, dict)):
+        errors.append(f"{where}: gap kinds must be {', '.join(GAP_KINDS)}")
+    for fid in sorted(evaluation_fact_ids(front) - fact_ids):
+        errors.append(f"{where}: cites unknown Fact {fid}")
+    return errors
+
+
+def refine_proposals(root: Path, folder: Path, slug: str, role: dict, taxonomy: dict) -> tuple:
+    """(Job ids evaluated under the Role, proposed role.yml changes from requirements recurring in 2+ of them)."""
+    jobs = []
+    for jid, path in evaluation_files(folder):
+        job_path = root / "jobs" / f"{jid}.md"
+        if read_job(path)[0].get("role") == slug and job_path.exists():
+            jobs.append((jid, read_job(job_path)[0]))
+    seen = {}
+    for jid, job in jobs:
+        for key in ("must_haves", "nice_to_haves"):
+            for item in job.get(key) or []:
+                for tag in item.get("tags") or []:
+                    entry = seen.setdefault(tag, {"jobs": [], "must": set(), "texts": []})
+                    if jid not in entry["jobs"]:
+                        entry["jobs"].append(jid)
+                    if key == "must_haves":
+                        entry["must"].add(jid)
+                    entry["texts"].append(f"{jid}: {item.get('text')}")
+    labels = {t.get("id"): t.get("en") for t in taxonomy.get("tags") or [] if isinstance(t, dict)}
+    requirements = [r for r in role.get("requirements") or [] if isinstance(r, dict)]
+    covered = role_tags(role)
+    adds, cites = [], {}
+    for tag, entry in seen.items():
+        if len(entry["jobs"]) < 2:
+            continue
+        if tag not in covered:
+            kind = "must" if 2 * len(entry["must"]) >= len(entry["jobs"]) else "nice"
+            adds.append({"key": tag, "kind": kind, "text": labels.get(tag) or tag, "tags": [tag], "origin": "job",
+                         "jobs": entry["jobs"], "must_in": len(entry["must"]), "texts": entry["texts"]})
+            continue
+        for req in requirements:
+            if tag in (req.get("tags") or []) and req.get("origin") in ("assumed", "job"):
+                new = [j for j in entry["jobs"] if j not in (req.get("jobs") or [])]
+                if new:
+                    cite = cites.setdefault(req["id"], {"key": req["id"], "requirement": req, "jobs": []})
+                    cite["jobs"] += [j for j in new if j not in cite["jobs"]]
+    adds.sort(key=lambda p: (-len(p["jobs"]), p["key"]))
+    return [jid for jid, _ in jobs], adds + sorted(cites.values(), key=lambda p: p["key"])
+
+
+def render_evaluation(front: dict, job: dict, reqs: dict, role, by_id: dict, profile: dict, basis: dict) -> str:
+    lines = [f"# Evaluation: {job.get('title')} · {job.get('company')}", ""]
+    who = f"Candidate {front['candidate']} {profile.get('name')} · Job {front['job']}"
+    if role:
+        lines.append(f"{who} · Role {role.get('title')} (`{front['role']}`)")
+    else:
+        lines += [who, "", "No Role fits this Job, so it was evaluated against all of the Candidate's Facts. "
+                  "A Role can be created from this Job."]
+    lines += ["", f"**Success rating: {front['rating']}.** Fit score {front['score']} / 100.", "", front["summary"],
+              "", "## Success rating", ""]
+    lines += [f"- {reason}" for reason in front["reasons"]]
+    lines += ["", "## Fit score", "", "| Dimension | Weight | Score | Basis |", "|---|---|---|---|"]
+    lines += [f"| {label} | {weight}% | {front['dimensions'][key]} | {basis[key]} |" for key, weight, label in RUBRIC]
+    lines += ["", "## Hard requirements", ""]
+    for h in front["hard"]:
+        req = reqs[h["requirement"]]
+        if h["kind"] == "years" and "years" in h:
+            detail = f"{h['years']} years from the cited experience; the Job asks for {h['min_years']}"
+        elif h["result"] == "failed":
+            detail = f"{', '.join(h['facts'])}: {h['why']}"
+        elif h["result"] == "met":
+            detail = "see Evidence"
+        else:
+            detail = "no sourced Fact yet; see Gaps"
+        lines.append(f"- {h['requirement']} ({h['kind']}) {req['text']}: {h['result']} — {detail}")
+    if not front["hard"]:
+        lines.append("None.")
+    lines += ["", "## Evidence", ""]
+    for entry in front["evidence"]:
+        req = reqs[entry["requirement"]]
+        lines.append(f"### {entry['requirement']} {req['text']}")
+        lines += [f"- {c['id']} ({by_id[c['id']].get('evidence')}): {by_id[c['id']].get('statement')} — {c['why']}"
+                  for c in entry["facts"]]
+        lines.append("")
+    lines += ["## Gaps", ""]
+    for gap in front["gaps"]:
+        linked = f" ({', '.join(gap['facts'])})" if gap["facts"] else ""
+        lines.append(f"- {gap['requirement']} {reqs[gap['requirement']]['text']}: {gap['kind']}{linked} — {gap['close']}")
+    if not front["gaps"]:
+        lines.append("None.")
+    targets = achievement_targets(job, reqs)
+    lines += ["", "## Achievements", ""]
+    lines += [f"- {a['fact']}: {by_id[a['fact']].get('statement')} → {a['target']} ({targets[a['target']]}) — {a['why']}"
+              for a in front["achievements"]] or ["None."]
+    salary = profile.get("salary")
+    salary = salary if isinstance(salary, dict) else {}
+    wanted = {"salary": salary.get("expected"), "location": profile.get("location"), "work_mode": profile.get("work_mode")}
+    lines += ["", "## Salary, location, work mode", ""]
+    for key in CONDITIONS:
+        item = front["conditions"][key]
+        lines.append(f"- {key.replace('_', ' ').capitalize()} (Job: {job.get(key) or 'not stated'}; "
+                     f"Candidate: {wanted[key] or 'not recorded'}): {item['fit']} — {item['why']}")
+    lines += ["", "## Risks", ""]
+    lines += [f"- {r['risk']} — {r['close']}" for r in front["risks"]] or ["None."]
+    return f"---\n{hhyaml.dumps(front)}---\n\n" + "\n".join(lines).rstrip() + "\n"
 
 
 # ---------------------------------------------------------------- commands
@@ -1152,6 +1425,11 @@ def cmd_candidate_show(args):
         stale = role_stale(path, role, facts)
         status = "not built" if stale == ["not built yet"] else ("profile stale" if stale else "profile current")
         print(f"  {slug}: {role.get('title')} (priority {role.get('priority')}, {role.get('state')}, {status})")
+    evaluations = evaluation_files(folder)
+    print(f"Evaluations: {len(evaluations)}")
+    for jid, path in evaluations:
+        ev = read_job(path)[0]
+        print(f"  {jid}: {ev.get('rating')} ({ev.get('score')}) under {ev.get('role') or 'no Role'}, {ev.get('evaluated')}")
 
 
 def move_candidate(args, to_archive: bool):
@@ -1375,7 +1653,7 @@ def cmd_index(args):
     root = data_dir()
     counts = rebuild_index(root)
     print(f"Rebuilt {root / 'index.sqlite'}: {counts['candidates']} Candidates, {counts['facts']} Facts, "
-          f"{counts['roles']} Roles.")
+          f"{counts['roles']} Roles, {counts['evaluations']} Evaluations.")
 
 
 def cmd_job_listing(args):
@@ -1615,25 +1893,9 @@ def cmd_role_build(args):
         raise HHError("the Role profile must be a mapping")
     by_id = {f.get("id"): f for f in facts if isinstance(f, dict)}
     reqs = {r.get("id"): r for r in role.get("requirements") or [] if isinstance(r, dict)}
-    rank = {level: n for n, level in enumerate(EVIDENCE)}
     errors = []
     if not reqs:
         errors.append("the Role has no requirements yet")
-
-    def usable(fid, where, inferred=False):
-        fact = by_id.get(fid)
-        if fact is None:
-            errors.append(f"{where}: unknown Fact {fid}")
-        elif fact.get("state") != "active":
-            errors.append(f"{where}: {fid} is {fact.get('state')}; only active Facts count")
-        elif inferred and fact.get("origin") != "inferred":
-            errors.append(f"{where}: {fid} is sourced; cite it as evidence instead")
-        elif not inferred and fact.get("origin") != "sourced":
-            errors.append(f"{where}: {fid} is inferred; list it under the requirement's gap to confirm")
-        else:
-            return True
-        return False
-
     positioning = data.get("positioning") or {}
     for key in ("headline", "summary"):
         if not str(positioning.get(key) or "").strip():
@@ -1641,42 +1903,11 @@ def cmd_role_build(args):
     if not positioning.get("facts"):
         errors.append("positioning needs the Facts it is built from")
     for fid in positioning.get("facts") or []:
-        usable(fid, "positioning")
-    evidence = {}
-    for entry in data.get("evidence") or []:
-        rid = entry.get("requirement")
-        if rid not in reqs:
-            errors.append(f"evidence: unknown requirement {rid}")
-            continue
-        cited = []
-        for item in entry.get("facts") or []:
-            if not str(item.get("why") or "").strip():
-                errors.append(f"evidence {rid}: say why {item.get('id')} supports it")
-            if usable(item.get("id"), f"evidence {rid}"):
-                cited.append({"id": item["id"], "why": item["why"]})
-        cited.sort(key=lambda c: rank.get(str(by_id[c["id"]].get("evidence")), 9))
-        if cited:
-            evidence[rid] = cited
-    given = {g.get("requirement"): g for g in data.get("gaps") or []}
-    gaps = []
-    for rid, req in reqs.items():
-        best = min((rank.get(str(by_id[c["id"]].get("evidence")), 9) for c in evidence.get(rid, [])), default=None)
-        gap = given.pop(rid, None)
-        if best is not None and best < rank["self-reported"]:
-            if gap:
-                errors.append(f"gaps: {rid} has {EVIDENCE[best]} evidence, so it is not a gap")
-            continue
-        if not gap or not str(gap.get("close") or "").strip():
-            errors.append(f"gaps: {rid} ({req.get('text')}) needs a gap entry saying how to close it")
-            continue
-        if best is not None:
-            kind, linked = "weak-evidence", [c["id"] for c in evidence[rid]]
-        else:
-            linked = [fid for fid in gap.get("facts") or [] if usable(fid, f"gap {rid}", inferred=True)]
-            kind = "to-confirm" if linked else "missing"
-        gaps.append({"requirement": rid, "kind": kind, "facts": linked, "close": gap["close"]})
-    for rid in given:
-        errors.append(f"gaps: unknown requirement {rid}")
+        problem = fact_problem(by_id, fid)
+        if problem:
+            errors.append(f"positioning: {problem}")
+    evidence = check_evidence(reqs, data.get("evidence"), by_id, errors)
+    gaps = check_gaps(reqs, evidence, data.get("gaps"), by_id, errors)
     if errors:
         raise HHError("nothing written:\n  " + "\n  ".join(errors))
     referenced = set(positioning["facts"]) | {c["id"] for cs in evidence.values() for c in cs} | {
@@ -1729,6 +1960,390 @@ def cmd_role_stale(args):
                 print(f"{cid}  {slug}: {'; '.join(reasons)}")
     if not found:
         print("Every Role profile is current.")
+
+
+def cmd_role_refine(args):
+    root = data_dir()
+    folder = find_candidate(root, args.id, archived=False)
+    role = load_role(find_role(folder, args.role))
+    jobs, proposals = refine_proposals(root, folder, args.role, role, load_taxonomy(root))
+    if not args.accept:
+        print(f"{args.role}: {len(jobs)} Jobs evaluated under this Role" + (f": {', '.join(jobs)}" if jobs else ""))
+        adds = [p for p in proposals if "requirement" not in p]
+        cites = [p for p in proposals if "requirement" in p]
+        if adds:
+            print("\nAdd: Tags required by 2 or more of these Jobs that no requirement has")
+            for p in adds:
+                print(f"  {p['key']}  ({p['text']}) in {len(p['jobs'])} Jobs, must-have in {p['must_in']} → {p['kind']}")
+                print("".join(f"      {text}\n" for text in p["texts"]), end="")
+        if cites:
+            print("\nCite Jobs: assumed or Job requirements that these Jobs also ask for")
+            for p in cites:
+                req = p["requirement"]
+                print(f"  {p['key']} ({req.get('origin')}) {req.get('text')} → origin job, add {', '.join(p['jobs'])}")
+        if proposals:
+            keys = " ".join(p["key"] for p in proposals)
+            print(f"\nShow these to the user; apply the ones they accept with: role refine {args.id} {args.role} --accept {keys}")
+        else:
+            print("No requirement recurs in 2 or more of these Jobs beyond what role.yml has.")
+        return
+    by_key = {p["key"]: p for p in proposals}
+    unknown = [key for key in args.accept if key not in by_key]
+    if unknown:
+        raise HHError(f"no proposal {', '.join(unknown)}; proposals: {', '.join(by_key) or 'none'}")
+    for key in args.accept:
+        p = by_key[key]
+        if "requirement" in p:
+            req = next(r for r in role["requirements"] if isinstance(r, dict) and r.get("id") == key)
+            req["origin"] = "job"
+            req["jobs"] = list(req.get("jobs") or []) + p["jobs"]
+        else:
+            role.setdefault("requirements", []).append(
+                {k: p[k] for k in ("kind", "text", "tags", "origin", "jobs")})
+    save_role(root, folder, args.role, role)
+    stale = role_stale(folder / "roles" / args.role, role, read_list(folder / "facts.yml"))
+    print(f"{args.role}  applied: {', '.join(args.accept)}" + (f"; profile: {'; '.join(stale)}" if stale else ""))
+
+
+def cmd_evaluation_match(args):
+    root = data_dir()
+    job_path = root / "jobs" / f"{args.job}.md"
+    if not job_path.exists():
+        raise HHError(f"Job {args.job} has no snapshot in jobs/; save it with job save first")
+    job, _ = read_job(job_path)
+    reqs = job_requirements(job)
+    job_tags = set(requirement_tags(job))
+    must_tags = {t for r in reqs.values() if r["kind"] == "must" for t in r["tags"]}
+    print(f"{args.job}  {job.get('title')} · {job.get('company')}")
+    print(f"Job Tags: {len(job_tags)} ({len(must_tags)} on must-haves)\n")
+    con = open_index(root)
+    if args.id:
+        find_candidate(root, args.id, archived=False)
+        cids = [candidate_id(args.id)]
+    else:
+        cids = [r[0] for r in con.execute("SELECT id FROM candidates WHERE status = 'active' ORDER BY id")]
+    found = []
+    for cid in cids:
+        name, seniority, years = con.execute(
+            "SELECT name, seniority, years_experience FROM candidates WHERE id = ?", (cid,)).fetchone()
+        have = {r[0] for r in con.execute("SELECT tag FROM candidate_tags WHERE candidate_id = ?", (cid,))}
+        roles = []
+        for slug, priority, built, stale in con.execute(
+                "SELECT slug, priority, built, stale FROM roles WHERE candidate_id = ? AND state = 'active'", (cid,)):
+            tags = {r[0] for r in con.execute(
+                "SELECT tag FROM role_requirement_tags WHERE candidate_id = ? AND role = ?", (cid, slug))}
+            gaps = con.execute(
+                "SELECT COUNT(*) FROM role_gaps g JOIN role_requirements q ON q.candidate_id = g.candidate_id "
+                "AND q.role = g.role AND q.id = g.requirement WHERE g.candidate_id = ? AND g.role = ? "
+                "AND q.kind = 'must' AND g.kind != 'weak-evidence'", (cid, slug)).fetchone()[0]
+            roles.append((len(tags & must_tags), len(tags & job_tags), priority or 99, slug, built, stale, gaps))
+        roles.sort(key=lambda r: (-r[0], -r[1], r[2]))
+        best = (roles[0][0], roles[0][1]) if roles and roles[0][1] else (0, 0)
+        found.append((best, cid, name, seniority, years, have, roles))
+    found.sort(key=lambda row: (-row[0][0], -row[0][1], row[1]))
+    hidden = 0
+    for best, cid, name, seniority, years, have, roles in found:
+        if not args.id and not args.all and not best[1]:
+            hidden += 1
+            continue
+        print(f"{cid} {name}  ({seniority or 'seniority not set'}, {years} years)  Facts cover "
+              f"{len(have & job_tags)} of {len(job_tags)} Job Tags ({len(have & must_tags)} of {len(must_tags)} on must-haves)")
+        for shared_must, shared, _, slug, built, stale, gaps in roles:
+            profile = f"profile built {built}, must-have gaps: {gaps}" + (", stale" if stale else "") if built \
+                else "profile not built"
+            print(f"    role {slug}: shares {shared} of {len(job_tags)} Job Tags ({shared_must} on must-haves); {profile}")
+        if not any(r[1] for r in roles):
+            print("    no active Role shares a Tag with this Job")
+        done = con.execute("SELECT role, score, rating FROM evaluations WHERE candidate_id = ? AND job_id = ?",
+                           (cid, args.job)).fetchone()
+        if done:
+            print(f"    evaluated: {done[2]} ({done[1]}) under {done[0] or 'no Role'}")
+    if hidden:
+        print(f"Not listed: {hidden} other active {'Candidate' if hidden == 1 else 'Candidates'} with no active Role "
+              "sharing a Tag with this Job; pass --all to list them.")
+    if not found:
+        print("No active Candidates.")
+    if not args.id:
+        return
+    folder = find_candidate(root, args.id, archived=False)
+    profile = read_yaml(folder / "profile.yml", {})
+    profile = profile if isinstance(profile, dict) else {}
+    salary = profile.get("salary")
+    salary = salary if isinstance(salary, dict) else {}
+    print(f"\nJob: {job.get('salary')} · {job.get('location')} · {job.get('work_mode') or 'work mode not stated'}")
+    print(f"Candidate wants: salary {salary.get('expected') or 'not recorded'} · "
+          f"{profile.get('location') or 'location not recorded'} · {profile.get('work_mode') or 'work mode not recorded'}")
+    facts = [f for f in read_list(folder / "facts.yml") if isinstance(f, dict) and f.get("state") != "superseded"]
+    rank = {level: n for n, level in enumerate(EVIDENCE)}
+    print("\nFacts sharing a Tag with each Job requirement, strongest evidence first\n")
+    for rid, req in reqs.items():
+        tags = set(req["tags"])
+        proposed = f"; proposed: {', '.join(req['proposed'])}" if req["proposed"] else ""
+        print(f"{rid} {req['text']}  [{', '.join(sorted(tags)) or 'no Tags'}{proposed}]")
+        hits = sorted((f for f in facts if tags & set(f.get("tags") or [])),
+                      key=lambda f: (f.get("origin") != "sourced", rank.get(str(f.get("evidence")), 9), f.get("id")))
+        for fact in hits:
+            label = fact.get("evidence") if fact.get("origin") == "sourced" else "inferred, unconfirmed"
+            extra = ", conflict" if fact.get("state") == "conflict" else ""
+            print(f"    {fact['id']}  [{fact.get('kind')}, {label}{extra}]  {fact.get('statement')}")
+        if not hits:
+            print("    no Fact shares a Tag; look for related Facts or record a gap")
+    print("\nAchievement targets")
+    for target, text in achievement_targets(job, reqs).items():
+        print(f"  {target}  {text}")
+
+
+def cmd_evaluation_save(args):
+    root = data_dir()
+    folder = find_candidate(root, args.id, archived=False)
+    job_path = root / "jobs" / f"{args.job}.md"
+    if not job_path.exists():
+        raise HHError(f"Job {args.job} has no snapshot in jobs/; save it with job save first")
+    job, _ = read_job(job_path)
+    target = folder / "applications" / args.job / "evaluation.md"
+    if target.exists() and not args.replace:
+        raise HHError(f"{target} already exists; pass --replace to evaluate again")
+    data = read_payload(args)
+    if not isinstance(data, dict):
+        raise HHError("the Evaluation must be a mapping")
+    known = tag_ids(load_taxonomy(root))
+    profile = read_yaml(folder / "profile.yml", {})
+    profile = profile if isinstance(profile, dict) else {}
+    facts = read_list(folder / "facts.yml")
+    by_id = {f.get("id"): f for f in facts if isinstance(f, dict)}
+    reqs = job_requirements(job)
+    errors = []
+    allowed = ("role", "job_level", "industries", "domains", "evidence", "gaps", "hard", "achievements",
+               "conditions", "risks", "summary")
+    errors += [f"unknown field {key!r}; fields are {', '.join(allowed)}" for key in data if key not in allowed]
+    if not reqs:
+        errors.append(f"Job {args.job} lists no requirements")
+    slug, role = data.get("role"), None
+    if slug:
+        try:
+            role = load_role(find_role(folder, str(slug)))
+        except HHError as exc:
+            errors.append(str(exc))
+        else:
+            if role.get("state") == "dropped":
+                errors.append(f"the Role {slug} is dropped; choose another Role or evaluate without one")
+
+    evidence = check_evidence(reqs, data.get("evidence"), by_id, errors)
+    hard, failed, details = [], set(), {}
+    for entry in data.get("hard") or []:
+        rid, kind = entry.get("requirement"), entry.get("kind")
+        where = f"hard {rid}"
+        if rid not in reqs:
+            errors.append(f"hard: unknown requirement {rid}")
+            continue
+        if rid in details:
+            errors.append(f"{where}: listed twice")
+            continue
+        if kind not in HARD_KINDS:
+            errors.append(f"{where}: kind must be one of {', '.join(HARD_KINDS)}")
+            continue
+        if reqs[rid]["kind"] != "must":
+            errors.append(f"{where}: only must-haves can be hard requirements")
+            continue
+        result = {"requirement": rid, "kind": kind}
+        if kind == "years":
+            minimum = entry.get("min_years")
+            if isinstance(minimum, bool) or not isinstance(minimum, (int, float)) or minimum <= 0:
+                errors.append(f"{where}: min_years must be the number of years the Job asks for")
+                continue
+            result["min_years"] = minimum
+            counted = [by_id[c["id"]] for c in evidence.get(rid, [])
+                       if by_id[c["id"]].get("kind") == "experience" and by_id[c["id"]].get("period") is not None]
+            if evidence.get(rid) and not counted:
+                errors.append(f"{where}: cite experience Facts with a period so their years can be counted")
+                continue
+            if counted:
+                result["years"] = years_experience(counted)
+                result["result"] = "met" if result["years"] >= minimum else "failed"
+            else:
+                result["result"] = "unknown"
+        elif entry.get("met") is False:
+            linked = list(entry.get("facts") or [])
+            for fid in linked:
+                problem = fact_problem(by_id, fid)
+                if problem:
+                    errors.append(f"{where}: {problem}")
+            if not linked or not str(entry.get("why") or "").strip():
+                errors.append(f"{where}: a failed hard requirement lists the Facts that show it and why")
+            if rid in evidence:
+                errors.append(f"{where}: a failed hard requirement has no evidence; remove it from evidence")
+            result.update(result="failed", facts=linked, why=entry.get("why"))
+        elif "met" in entry:
+            errors.append(f"{where}: give met only as false, when the cited Facts show it is not met")
+            continue
+        else:
+            result["result"] = "met" if rid in evidence else "unknown"
+        if result["result"] == "failed":
+            failed.add(rid)
+        details[rid] = result
+        hard.append(result)
+    gaps = check_gaps(reqs, evidence, data.get("gaps"), by_id, errors, skip=failed)
+
+    candidate_level, job_level = profile.get("seniority"), data.get("job_level")
+    if candidate_level not in SENIORITY:
+        errors.append("profile.yml has no seniority; ask the user and set it first")
+    if job_level not in SENIORITY:
+        errors.append(f"job_level must be the level the Job asks for: one of {', '.join(SENIORITY)}")
+    industries, domains = data.get("industries") or [], data.get("domains") or []
+    for key, values in (("industries", industries), ("domains", domains)):
+        prefix = "industry/" if key == "industries" else "domain/"
+        if not isinstance(values, list) or any(t not in known or not str(t).startswith(prefix) for t in values):
+            errors.append(f"{key} must be {prefix[:-1]} Tags from taxonomy.yml")
+    if not industries and not domains:
+        errors.append("give the Job's industries or domains as Tags")
+
+    targets = achievement_targets(job, reqs)
+    achievements = []
+    for entry in data.get("achievements") or []:
+        fid, aim = entry.get("fact"), entry.get("target")
+        where = f"achievement {fid}"
+        problem = fact_problem(by_id, fid)
+        if problem:
+            errors.append(f"{where}: {problem}")
+            continue
+        if by_id[fid].get("kind") not in ("achievement", "project"):
+            errors.append(f"{where}: {fid} is a Fact of kind {by_id[fid].get('kind')}; cite achievement or project Facts")
+        elif "result" in (by_id[fid].get("missing") or []):
+            errors.append(f"{where}: {fid} has no result yet; ask for it before counting it")
+        if aim not in targets:
+            errors.append(f"{where}: target must be one of {', '.join(targets) or 'the Job duties'}")
+        if not str(entry.get("why") or "").strip():
+            errors.append(f"{where}: say why it matches {aim}")
+        achievements.append({"fact": fid, "target": aim, "why": entry.get("why")})
+
+    given = data.get("conditions") or {}
+    conditions = {}
+    for key in CONDITIONS:
+        item = given.get(key) if isinstance(given, dict) else None
+        if not isinstance(item, dict) or item.get("fit") not in CONDITION_FITS:
+            errors.append(f"conditions {key}: fit must be one of {', '.join(CONDITION_FITS)}")
+        elif not str(item.get("why") or "").strip():
+            errors.append(f"conditions {key}: say why")
+        else:
+            conditions[key] = {"fit": item["fit"], "why": item["why"]}
+    errors += [f"conditions: unknown condition {key!r}" for key in given if key not in CONDITIONS] \
+        if isinstance(given, dict) else ["conditions must be a mapping of salary, location and work_mode"]
+    risks = []
+    for item in data.get("risks") or []:
+        if not isinstance(item, dict) or not str(item.get("risk") or "").strip() or not str(item.get("close") or "").strip():
+            errors.append("each risk needs risk and close (how to reduce it)")
+        else:
+            risks.append({"risk": item["risk"], "close": item["close"]})
+    summary = str(data.get("summary") or "").strip()
+    if not summary:
+        errors.append("summary is required: the recommendation in a few sentences")
+    if errors:
+        raise HHError("nothing written:\n  " + "\n  ".join(errors))
+
+    scores, basis = {}, {}
+    skill_reqs = [rid for rid in reqs if rid not in details]
+    weights = {rid: 2 if reqs[rid]["kind"] == "must" else 1 for rid in skill_reqs}
+    backed = [rid for rid in skill_reqs if rid in evidence]
+    total = sum(weights.values())
+    scores["skills"] = round(100 * sum(weights[r] for r in backed) / total) if total else 50
+    basis["skills"] = (f"{len(backed)} of {len(skill_reqs)} requirements backed by sourced Facts; must-haves count twice"
+                       if total else "the Job lists no requirements besides hard ones")
+    steps = SENIORITY.index(candidate_level) - SENIORITY.index(job_level)
+    scores["seniority"] = (100, 60, 30)[abs(steps)] if abs(steps) < 3 else 0
+    fit = "matches" if not steps else (f"over-qualified by {steps}" if steps > 0 else f"under-qualified by {-steps}")
+    basis["seniority"] = f"Job asks {job_level}; Candidate is {candidate_level} ({fit})"
+    own = {t for f in facts if isinstance(f, dict) and f.get("state") == "active" and f.get("origin") == "sourced"
+           for t in f.get("tags") or []}
+    shared_industries, shared_domains = [t for t in industries if t in own], [t for t in domains if t in own]
+    scores["industry"] = 100 if shared_industries else (60 if shared_domains else 0)
+    basis["industry"] = ("same industry: " + ", ".join(shared_industries) if shared_industries
+                         else "close domain: " + ", ".join(shared_domains) if shared_domains
+                         else "no shared industry or domain")
+    matched, needed = {a["target"] for a in achievements}, min(3, len(targets))
+    scores["achievements"] = round(100 * min(1, len(matched) / needed)) if needed else 0
+    counted = "duties" if job.get("duties") else "requirements"
+    basis["achievements"] = f"measurable results for {len(matched)} of {needed} {counted} needed"
+    scores["conditions"] = round(sum(CONDITION_FITS[c["fit"]] for c in conditions.values()) / len(CONDITIONS))
+    basis["conditions"] = ", ".join(f"{key.replace('_', ' ')} {conditions[key]['fit']}" for key in CONDITIONS)
+    score = round(sum(scores[key] * weight for key, weight, _ in RUBRIC) / 100)
+
+    band = RATINGS[next(n for n, floor in enumerate(RATING_FLOORS) if score >= floor)]
+    rating = RATINGS[min(RATINGS.index(band) + 1, len(RATINGS) - 1)] if failed else band
+    unknown = [h for h in hard if h["result"] == "unknown"]
+    gate = "failed" if failed else ("unconfirmed" if unknown else "passed")
+    floors = {"high": f"{RATING_FLOORS[0]} and above", "medium": f"{RATING_FLOORS[1]} to {RATING_FLOORS[0] - 1}",
+              "low": f"below {RATING_FLOORS[1]}"}
+    reasons = [f"Fit score {score} is in the {band} band ({floors[band]})."]
+    for h in hard:
+        text = reqs[h["requirement"]]["text"]
+        if h["result"] == "failed":
+            why = (f"{h['years']} years of cited experience against {h['min_years']}" if h["kind"] == "years"
+                   else h["why"])
+            reasons.append(f"Fails the hard requirement {h['requirement']} ({text}): {why}.")
+        elif h["result"] == "unknown":
+            reasons.append(f"Hard requirement {h['requirement']} ({text}) is unconfirmed; confirm it before applying.")
+    if failed:
+        reasons.append(f"Failing a hard requirement lowers the rating from {band} to {rating}." if rating != band
+                       else "Failing a hard requirement would lower the rating, but it is already low.")
+    must_gaps = [g["requirement"] for g in gaps if reqs[g["requirement"]]["kind"] == "must"
+                 and g["kind"] in ("missing", "to-confirm")]
+    if must_gaps:
+        noun = "must-have is" if len(must_gaps) == 1 else "must-haves are"
+        reasons.append(f"{len(must_gaps)} {noun} missing or unconfirmed: {', '.join(must_gaps)}.")
+    strongest = max(RUBRIC, key=lambda d: (scores[d[0]], d[1]))
+    weakest = min(RUBRIC, key=lambda d: (scores[d[0]], -d[1]))
+    reasons.append(f"Strongest: {strongest[2].lower()} ({scores[strongest[0]]}); "
+                   f"weakest: {weakest[2].lower()} ({scores[weakest[0]]}).")
+
+    front = {
+        "candidate": candidate_id(args.id), "job": args.job, "role": slug or None, "evaluated": today(),
+        "score": score, "rating": rating, "gate": gate, "dimensions": scores,
+        "job_level": job_level, "candidate_level": candidate_level, "industries": industries, "domains": domains,
+        "evidence": [{"requirement": rid, "facts": evidence[rid]} for rid in reqs if rid in evidence],
+        "gaps": gaps, "hard": hard, "achievements": achievements, "conditions": conditions, "risks": risks,
+        "summary": summary, "reasons": reasons,
+    }
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(render_evaluation(front, job, reqs, role, by_id, profile, basis), encoding="utf-8")
+    print(f"{args.job}  {target}")
+    print(f"Success rating: {rating} · fit score {score} · hard requirements {gate} · "
+          f"{len(gaps)} {'gap' if len(gaps) == 1 else 'gaps'} ({len(must_gaps)} on must-haves missing or unconfirmed)")
+    if not role:
+        print("No Role fits: offer to create one from this Job (see Evaluate Jobs in SKILL.md).")
+        return
+    stale = role_stale(folder / "roles" / str(slug), role, facts)
+    if stale:
+        print(f"Role profile {slug}: {'; '.join(stale)}; offer to rebuild it.")
+    _, proposals = refine_proposals(root, folder, str(slug), role, load_taxonomy(root))
+    if proposals:
+        noun = "change" if len(proposals) == 1 else "changes"
+        print(f"{len(proposals)} requirement {noun} proposed from the Jobs evaluated under {slug}: "
+              f"run role refine {args.id} {slug}")
+
+
+def cmd_evaluation_list(args):
+    root = data_dir()
+    con = open_index(root)
+    sql = ("SELECT e.candidate_id, c.name, e.job_id, e.role, e.score, e.rating, e.gate, e.evaluated "
+           "FROM evaluations e JOIN candidates c ON c.id = e.candidate_id WHERE 1 = 1")
+    params: list = []
+    if args.id:
+        sql += " AND e.candidate_id = ?"
+        params.append(candidate_id(args.id))
+    if args.job:
+        sql += " AND e.job_id = ?"
+        params.append(args.job)
+    if args.rating:
+        sql += " AND e.rating = ?"
+        params.append(args.rating)
+    rows = con.execute(sql + " ORDER BY e.candidate_id, e.score DESC", params).fetchall()
+    for cid, name, jid, role, score, rating, gate, evaluated in rows:
+        path = root / "jobs" / f"{jid}.md"
+        job = read_job(path)[0] if path.exists() else {}
+        print(f"{cid} {name}  {jid}  {rating} ({score}, hard requirements {gate})  {role or 'no Role'}  {evaluated}  "
+              f"{job.get('title', '?')} · {job.get('company', '?')}")
+    if not rows:
+        print("No Evaluations.")
 
 
 def matched_facts(con, cid: str, tag: str) -> list:
@@ -1970,6 +2585,31 @@ def build_parser() -> argparse.ArgumentParser:
     p = rsub.add_parser("stale", help="list Role profiles that are out of date, with reasons")
     p.add_argument("id", nargs="?")
     p.set_defaults(func=cmd_role_stale)
+    p = rsub.add_parser("refine", help="propose requirements that recur across the Jobs evaluated under a Role")
+    p.add_argument("id")
+    p.add_argument("role")
+    p.add_argument("--accept", nargs="+", default=[], metavar="TAG_OR_REQUIREMENT",
+                   help="apply these proposals, once the user accepts them")
+    p.set_defaults(func=cmd_role_refine)
+
+    ev = sub.add_parser("evaluation", help="evaluate Jobs against Candidates and their Roles")
+    esub = ev.add_subparsers(dest="action", required=True)
+    p = esub.add_parser("match", help="find Candidates and Roles for a Job, or list one Candidate's Facts per requirement")
+    p.add_argument("job")
+    p.add_argument("id", nargs="?")
+    p.add_argument("--all", action="store_true", help="also list Candidates with no Role sharing a Tag")
+    p.set_defaults(func=cmd_evaluation_match)
+    p = esub.add_parser("save", help="write an Evaluation from JSON or YAML on stdin")
+    p.add_argument("id")
+    p.add_argument("job")
+    p.add_argument("--file")
+    p.add_argument("--replace", action="store_true", help="evaluate again over an existing Evaluation")
+    p.set_defaults(func=cmd_evaluation_save)
+    p = esub.add_parser("list", help="list Evaluations with their Success ratings")
+    p.add_argument("id", nargs="?")
+    p.add_argument("--job")
+    p.add_argument("--rating", choices=RATINGS)
+    p.set_defaults(func=cmd_evaluation_list)
 
     job = sub.add_parser("job", help="read Listings and Jobs, and save Job snapshots")
     jsub = job.add_subparsers(dest="action", required=True)
