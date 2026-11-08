@@ -120,7 +120,8 @@ _Avoid_: success probability, chance, odds
 
 **Tailored resume**:
 The pair of resumes written for one Application, one in Chinese and one in
-English, using only Facts.
+English, starting from the Role profile of the Application's Role and using only
+sourced Facts, each line citing the Facts it comes from.
 _Avoid_: CV variant, generated resume
 
 **Feedback**:
