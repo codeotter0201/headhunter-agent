@@ -41,6 +41,10 @@ python3 <skill folder>/scripts/hh.py <command>
 | `job save [--replace]` | Save a Job snapshot from JSON or YAML on stdin; nothing is written if any check fails |
 | `job list` | List saved Job snapshots |
 | `job accept <term> <tag>` | Turn a proposed term into a Tag in every Job snapshot, once the Tag is in `taxonomy.yml` |
+| `role new <id>` / `role update <id> <role>` | Create a Role, or merge fields into its `role.yml`, from JSON or YAML on stdin; requirement ids are filled in |
+| `role match <id> <role>` | List the Facts that share a Tag with each requirement, strongest evidence first |
+| `role build <id> <role>` | Write the Role profile from JSON or YAML on stdin; gap kinds are worked out, and nothing is written if any check fails |
+| `role list [<id>]` / `role stale [<id>]` | List Roles and whether their profiles are current; list out-of-date profiles with reasons |
 | `validate [<id>]` | Check `taxonomy.yml`, Candidate folders and Job snapshots |
 | `index` | Delete and rebuild `index.sqlite` |
 | `search candidates` / `search facts` | Filter the Index (see Search) |
@@ -61,7 +65,10 @@ Searches rebuild the Index first when any file changed. Run `validate` after edi
     facts.yml                      one entry per Fact
     imports/                       Import reports, including unanswered follow-up questions
     glossary.yml                   Chinese ↔ English names for companies, titles, schools, terms
-    strategy.md                    job-search strategy
+    strategy.md                    job-search strategy; its Roles section is kept by the script
+    roles/<role-slug>/
+      role.yml                     Role: title, level, industries, priority, state, requirements
+      profile.md                   Role profile: positioning, evidence, gaps
     applications/<job-id>/
       status.yml                   stage, timeline, next step, due date
       evaluation.md                fit, reasons, gaps, success rating
@@ -73,7 +80,7 @@ Searches rebuild the Index first when any file changed. Run `validate` after edi
   archive/                         archived candidates
 ```
 
-Ids are zero-padded and assigned by the script: `c-001`, `s-001`, `f-001`, `q-001`. `<slug>` is the Candidate's name as given, lowercased, with spaces turned into hyphens and punctuation removed; Chinese characters stay as they are.
+Ids are zero-padded and assigned by the script: `c-001`, `s-001`, `f-001`, `q-001`. `<slug>` is the Candidate's name as given, lowercased, with spaces turned into hyphens and punctuation removed; Chinese characters stay as they are. `<role-slug>` comes from the Role's title the same way, and requirements are numbered `r-001` within their Role.
 
 A Job id comes from its URL: `j-104-<job code>`, `j-cakeresume-<company>-<job slug>`, `j-yourator-<number>`, `j-linkedin-<number>`. A page on any other site uses its host name and a hash of its URL, such as `j-jobs-lever-co-91b1946a`. A Job the user gave without a link uses a hash of its company and title, such as `j-user-3f9a1c2e`.
 
@@ -153,6 +160,39 @@ duties:
 
 Every requirement has at least one Tag or one proposed term. Requirements keep the posting's wording and language.
 
+**role.yml**:
+
+```yaml
+title: Senior Backend Engineer   # a title in glossary.yml, so it translates the same way everywhere
+level: senior                    # optional; same values as seniority
+industries: [industry/software]
+priority: 1                      # order among the Candidate's Roles
+state: active                    # active | paused | dropped
+created: 2026-11-08
+requirements:
+  - id: r-001
+    kind: must                   # must | nice
+    text: Python backend development
+    tags: [skill/python, function/backend]
+    origin: user                 # user | assumed | job
+  - id: r-002
+    kind: must
+    text: BI report development
+    tags: [skill/data-visualization]
+    origin: job
+    jobs: [j-yourator-25039]     # only for origin job
+```
+
+**profile.md**: a YAML block between `---` lines, then the profile in readable form, written by `role build`. The block holds `positioning` (`headline`, `summary`, and the `facts` they come from), `evidence` (per requirement, Fact ids with `why`, strongest evidence first), `gaps` (per requirement: `kind`, linked `facts`, and `close`, how to close it), and `built_from`, which records what the profile was built from:
+
+| Gap kind | Meaning |
+|---|---|
+| `missing` | No Fact supports the requirement |
+| `to-confirm` | Only inferred Facts support it; they are listed |
+| `weak-evidence` | Only self-reported Facts support it |
+
+A profile is stale when `role.yml` changed since it was built, a Fact it cites changed or was removed, or a newer active Fact shares a Tag with its requirements.
+
 ## Workflows
 
 ### Sort what the user gives
@@ -199,7 +239,7 @@ Import never asks for or depends on a target Role.
 
 ### Follow-up questions
 
-When you start working with a Candidate, run `questions <id>` and offer the open ones again. Save the user's answers as a Source with `source add <id> - --type interview`, cite them with `at: q-<number>`, mark the questions answered in their report, and add or update Facts.
+When you start working with a Candidate, run `questions <id>` and offer the open ones again, and run `role stale <id>` to offer rebuilding out-of-date Role profiles. Save the user's answers as a Source with `source add <id> - --type interview`, cite them with `at: q-<number>`, mark the questions answered in their report, and add or update Facts.
 
 ### Inferred Facts
 
@@ -211,16 +251,30 @@ When new input contradicts a Fact, write the new Fact, set both to `state: confl
 
 ### View, update, archive
 
-- `candidate show <id>`: profile summary, Facts by kind and evidence level, conflicts, top Tags, open follow-up questions and a Strategy summary.
+- `candidate show <id>`: profile summary, Facts by kind and evidence level, conflicts, top Tags, open follow-up questions, a Strategy summary and the Roles with their profile state.
 - Update basics by editing `profile.yml`, then `validate`.
 - `candidate archive <id>` removes a Candidate from searches; `candidate restore <id>` brings them back. Never delete a Candidate folder.
+
+### Roles
+
+A Candidate can pursue several Roles at once. Roles never change Facts, Sources or the Taxonomy, and adding a Role needs no new import.
+
+1. **Define**: from the user's description, write the title, level, industries and requirements, and pipe them to `role new <id>`. Mark each requirement's origin: `user` when the user said so, `assumed` when it comes from your general knowledge of the Role (tell the user these are assumptions), `job` when it comes from saved Jobs (list their ids). Add the title to `glossary.yml` first, as a title with both languages.
+2. **Match**: `role match <id> <role>` lists the Facts that share a Tag with each requirement. Judge which actually support it; other Facts may support it too.
+3. **Build**: pipe the profile to `role build <id> <role>`:
+   - `positioning`: a headline and short summary for this Role, using only what the listed Facts say.
+   - `evidence`: for each requirement, the active, sourced Facts that support it, each with why.
+   - `gaps`: for each requirement without documented or third-party evidence, how to close it; list inferred Facts under its gap to confirm. The script works out the gap kind and refuses a profile that leaves any requirement unaccounted for.
+4. **Keep current**: after imports or conflict decisions, `role stale` names the profiles to rebuild and why. Rebuilding never changes `role.yml`; change requirements only with the user, through `role update`.
+5. **Strategy**: priorities and states live in `role.yml` and appear in the Roles section of `strategy.md`. Drop a Role with `role update <id> <role>` and `{"state": "dropped"}`; its folder stays.
 
 ### Search
 
 - `search candidates` with `--tag` (Tag id, label or alias; repeat for AND), `--industry`, `--seniority`, `--status`, `--min-years` and `--text`. It counts only active, sourced Facts and shows which Facts matched each Tag.
+- `search candidates` also takes `--role` (an active Role whose title, in either language, or folder name contains the text), `--requirement-tag` and `--no-must-gaps` (the Role's profile is built and no must-have is `missing` or `to-confirm`). Together they apply to the same Role: "Candidates targeting data engineer with no must-have gaps" is `search candidates --role "data engineer" --no-must-gaps`.
 - `search facts` with `--candidate`, `--tag`, `--kind`, `--evidence`, `--origin`, `--state`, `--since <year>` and `--text`.
 - For a one-sentence request, turn it into these filters. For example, "Candidates with Python and finance background and 5+ years of experience" is `search candidates --tag python --industry finance --min-years 5`.
-- For anything the filters cannot express, use `query` on the Index tables: `candidates`, `sources`, `facts`, `fact_tags`, `fact_sources`, `tags`, `tag_terms`, `questions`, and the view `candidate_tags` (Tags on active, sourced Facts).
+- For anything the filters cannot express, use `query` on the Index tables: `candidates`, `sources`, `facts`, `fact_tags`, `fact_sources`, `tags`, `tag_terms`, `questions`, `roles`, `role_requirements`, `role_requirement_tags`, `role_evidence`, `role_gaps`, and the view `candidate_tags` (Tags on active, sourced Facts).
 
 ### Read Jobs
 
@@ -257,11 +311,12 @@ The script names itself in its User-Agent and follows robots.txt. When a site re
 3. **Supplement only by asking.** Add information only through follow-up questions and inferences the user confirms. Never search the web or another service for information about a Candidate.
 4. **Show conflicts, don't overwrite.** When new input contradicts an existing Fact, list both and ask the user which is right.
 5. **Tags come from the Taxonomy.** Propose new Tags; add them only when the user accepts.
-6. **Archive, don't delete.** Deleting a candidate moves their folder to `archive/`.
-7. **Success ratings are estimates.** Present them as high / medium / low with reasons, never as a real probability.
-8. **LinkedIn by hand only.** Read LinkedIn only from pages the user has open in their signed-in browser or text they paste. Never scrape it in bulk. If any site shows a CAPTCHA or sign-in wall, ask the user to handle it or paste the content.
-9. **Read job sites politely.** Follow robots.txt, identify the script honestly, and never work around a refusal or bot check.
-10. **Two resumes per job.** Write a Chinese and an English version; use `glossary.yml` so names are translated the same way every time.
+6. **Role profiles cite Facts, never change them.** Reference Facts by id; inferred Facts count only as gaps to confirm.
+7. **Archive, don't delete.** Deleting a candidate moves their folder to `archive/`.
+8. **Success ratings are estimates.** Present them as high / medium / low with reasons, never as a real probability.
+9. **LinkedIn by hand only.** Read LinkedIn only from pages the user has open in their signed-in browser or text they paste. Never scrape it in bulk. If any site shows a CAPTCHA or sign-in wall, ask the user to handle it or paste the content.
+10. **Read job sites politely.** Follow robots.txt, identify the script honestly, and never work around a refusal or bot check.
+11. **Two resumes per job.** Write a Chinese and an English version; use `glossary.yml` so names are translated the same way every time.
 
 ## Application stages
 
