@@ -15,7 +15,7 @@ You act as the user's headhunter assistant. A candidate may be the user themself
 
 ## Helper script
 
-Fixed, repeatable operations run through `scripts/hh.py` in this skill's folder. It needs Python 3.9 or later and no extra packages:
+Fixed, repeatable operations run through `scripts/hh.py` in this skill's folder. It needs Python 3.9 or later and no extra packages. Printing resumes to PDF uses Chrome, Chromium or Microsoft Edge, run headless; set `HEADHUNTER_BROWSER` to the browser's path when it is installed somewhere else:
 
 ```
 python3 <skill folder>/scripts/hh.py <command>
@@ -49,7 +49,10 @@ python3 <skill folder>/scripts/hh.py <command>
 | `evaluation match <job> [<id>] [--all]` | List the Candidates and Roles that share Tags with a Job; with a Candidate, list their Facts per Job requirement |
 | `evaluation save <id> <job> [--replace]` | Write an Evaluation from JSON or YAML on stdin; the fit score, gap kinds and Success rating are worked out, and nothing is written if any check fails |
 | `evaluation list [<id>] [--job <job>] [--rating <rating>]` | List Evaluations with their Success ratings |
-| `validate [<id>]` | Check `taxonomy.yml`, Candidate folders (with their Roles and Evaluations) and Job snapshots |
+| `resume plan <id> <job>` | Show what an Application's resumes start from: the Role profile, the Evaluation's evidence, what to leave out, the usable Facts and the Glossary |
+| `resume save <id> <job> [--replace]` | Write `resume.zh.md` and `resume.en.md` from JSON or YAML on stdin and print both to PDF; nothing is written if any check fails |
+| `resume pdf <id> <job>` | Check both resumes and print them to PDF again, after editing them by hand |
+| `validate [<id>]` | Check `taxonomy.yml`, Candidate folders (with their Roles, Evaluations and resumes) and Job snapshots |
 | `index` | Delete and rebuild `index.sqlite` |
 | `search candidates` / `search facts` | Filter the Index (see Search) |
 | `query "<SELECT ...>"` | Run a read-only SQL query on the Index |
@@ -77,8 +80,8 @@ Searches rebuild the Index first when any file changed. Run `validate` after edi
       status.yml                   stage, timeline, next step, due date
       evaluation.md                Evaluation: Role, fit score, reasons, gaps and risks, Success rating
       feedback.md                  feedback log and fixes
-      resume.zh.md  resume.zh.pdf
-      resume.en.md  resume.en.pdf
+      resume.zh.md  resume.zh.pdf  Tailored resume in Chinese: Markdown citing Facts, and its PDF
+      resume.en.md  resume.en.pdf  the same in English
   jobs/<job-id>.md                 Job snapshot: requirements with Tags, duties, salary, location, posting text
   companies/<company-slug>.md      company notes built from feedback
   archive/                         archived candidates
@@ -94,7 +97,7 @@ A Job id comes from its URL: `j-104-<job code>`, `j-cakeresume-<company>-<job sl
 
 YAML files use a plain subset: block mappings and lists, one-line `[...]` and `{...}`, quoted or plain values, `|` and `>` blocks, and comments. Quote any value that contains `: ` or starts with a symbol. Anchors, tags and plain values spread over several lines are rejected.
 
-**profile.yml**: `id`, `name`, `name_en`, `status` (active, paused, closed), `seniority` (intern, junior, mid, senior, lead, manager, director, executive), `location`, `work_mode`, `salary` (`current`, `expected`), `created`. Other basics may be added.
+**profile.yml**: `id`, `name`, `name_en`, `status` (active, paused, closed), `seniority` (intern, junior, mid, senior, lead, manager, director, executive), `location`, `work_mode`, `salary` (`current`, `expected`), `created`, and optionally `contact` (`email`, `phone`, `links`) for resume headers. Other basics may be added.
 
 **sources.yml**: one entry per Source.
 
@@ -238,6 +241,37 @@ The script adds `candidate`, `job`, `evaluated`, `candidate_level` (from `profil
 
 The fit score is the weighted sum, rounded. It maps to a Success rating: 75 and above high, 55 to 74 medium, below 55 low. Failing any hard requirement lowers the rating by one level; low stays low. The reasons name the band, each failed or unconfirmed hard requirement, the must-haves missing or unconfirmed, and the strongest and weakest dimensions.
 
+**resume.zh.md / resume.en.md**: a YAML block between `---` lines (`candidate`, `job`, `role`, `lang`, `written`, and `role_profile`, the build date of the Role profile it started from), then the resume, written by `resume save` from what you give it:
+
+```yaml
+headline: {zh: Python 後端工程師, en: Python backend engineer, facts: [f-001, f-006]}
+summary: {zh: ..., en: ..., facts: [f-002, f-003]}   # cites at least one Fact of the Role profile's positioning
+experience:
+  - org: 範例科技                 # a company in glossary.yml, in either language
+    title: 資深後端工程師          # optional: a title in glossary.yml that its Facts state
+    period: 2021-04..present      # optional: the period of one of its Facts
+    facts: [f-001]                # including the experience Fact at that company
+    bullets:
+      - {zh: ..., en: ..., facts: [f-003]}
+projects: [{zh: ..., en: ..., facts: [f-010]}]
+education: [{school: 樣本大學, zh: 資訊科學學士, en: B.S. in Computer Science, period: 2018, facts: [f-014]}]
+certificates: [{zh: ..., en: ..., facts: [f-009]}]
+skills: [python, docker]          # Tags, each on an active, sourced Fact
+```
+
+The script writes the name, location and contact from `profile.yml`, company, title, school and location names from `glossary.yml`, section headings in each language, and skills as Tag labels. Every line other than headings ends with the Facts it comes from, such as `<!-- f-003 -->`, or `<!-- profile -->` for the header. `resume save` refuses a resume when:
+
+- a Fact is inferred, superseded or in conflict, or an item cites none
+- a number in a line is not in the statements or periods of the Facts it cites
+- a title or school is not in its Facts, a company, title, school or location is not in `glossary.yml`, or a period is not one of its Facts'
+- the Chinese and English lines name a Glossary entry differently, or the English has Chinese in it
+- it uses a word of a requirement the Candidate lacks: a `missing` or `to-confirm` gap or a failed hard requirement in the Evaluation, by its Tags' labels and aliases and its proposed terms, unless a sourced Fact says it
+- the summary cites none of the Role profile's positioning Facts
+
+`validate` and `resume pdf` check the Markdown again after hand edits: every line cites known Facts, its numbers are in them, and the English has no Chinese; `resume pdf` also refuses words of lacking requirements.
+
+The PDFs are A4 and printed by a headless Chrome, Chromium or Edge with a throwaway profile, from local files only. The Chinese PDF uses the first installed of Noto Sans TC, Noto Sans CJK TC, PingFang TC, Microsoft JhengHei and Heiti TC. Ligatures are turned off, and characters that the PDF's text layer records as Kangxi radicals (⼩ for 小) are mapped back to the ideographs, so copied text and applicant tracking systems read the same words; any left are reported.
+
 ## Workflows
 
 ### Sort what the user gives
@@ -325,6 +359,17 @@ Each Evaluation compares one Job snapshot with one Candidate under the Role that
 6. **Report** the Success rating with its reasons, the gaps with how to close them, and the risks. Ask the questions the gaps need and save the answers as in Follow-up questions.
 7. **No fitting Role**: offer to create a Role from the Job: its title (add it to `glossary.yml`), requirements from its must-haves and nice-to-haves with their Tags, `origin: job` and the Job id. Run `role new` only when the user agrees.
 8. **Refine Roles**: when `evaluation save` reports proposed changes, run `role refine <id> <role>`. It proposes Tags that two or more Jobs evaluated under the Role require and no requirement has (a must-have when at least half of those Jobs list it as one), and assumed or Job requirements those Jobs also ask for. Show them to the user, apply the accepted ones with `--accept`, then rebuild the Role profile.
+
+### Write resumes
+
+Write a Chinese and an English resume for an Application worth pursuing, after its Evaluation.
+
+1. **Check**: the Application needs an Evaluation made under a Role, and that Role's profile must be current; `resume plan` says which is missing. An Evaluation without a Role needs a Role created from the Job first (Evaluate Jobs, step 7). Add any company, title, school or location still missing from `glossary.yml`, and `contact` and `name_en` to `profile.yml` if the user gives them.
+2. **Plan**: `resume plan <id> <job>` shows the Role profile's positioning and the order of its evidence, the Facts the Evaluation cites for each Job requirement, what to leave out, every usable Fact by kind, and the Glossary.
+3. **Write**: start from the positioning and the evidence order, then reorder and rewrite the Facts for this Job: the most relevant first, the Job's wording where the Facts support it. Write each line in both languages, one claim per line, with the Facts it comes from. Use only what the cited Facts say: no new numbers, titles, dates or skills. Requirements the Candidate lacks stay in the Evaluation as gaps.
+4. **Save**: pipe the resume to `resume save <id> <job>`; it writes both Markdown files and PDFs. Use `--replace` to write them again.
+5. **Hand edits**: after the user edits a Markdown file, run `resume pdf <id> <job>`.
+6. **Report** the four files, and remind the user that the resumes leave out the gaps listed in the Evaluation.
 
 ### Search
 
