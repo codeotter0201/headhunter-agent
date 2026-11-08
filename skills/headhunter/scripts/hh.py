@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -28,6 +29,7 @@ from xml.etree import ElementTree
 
 sys.dont_write_bytecode = True  # keep the plugin folder free of __pycache__
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hhweb  # noqa: E402
 import hhyaml  # noqa: E402
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
@@ -58,6 +60,11 @@ FACT_ORDER = (
 )
 REPORT_SECTIONS = (
     "Facts extracted", "Missing fields", "Conflicts", "Rejected", "Proposed Tags", "Follow-up questions",
+)
+READ_WITH = ("fetch", "browser", "pasted", "file")
+JOB_ORDER = (
+    "id", "site", "site_id", "url", "title", "company", "location", "salary", "work_mode",
+    "employment_type", "posted", "read", "read_with", "must_haves", "nice_to_haves", "duties",
 )
 QUESTION_LINE = re.compile(r"^\s*- \[( |x|X)\] (q-\d+):?\s*(.*)$")
 YEAR_MONTH = re.compile(r"^(\d{4})(?:-(\d{2}))?$")
@@ -736,6 +743,116 @@ def docx_text(path: Path) -> str:
     return "\n".join(paragraphs).strip()
 
 
+# ---------------------------------------------------------------- jobs
+
+
+def job_files(root: Path) -> list:
+    return sorted((root / "jobs").glob("j-*.md"))
+
+
+def read_job(path: Path) -> tuple:
+    text = path.read_text(encoding="utf-8")
+    match = re.match(r"^---\n(.*?)\n---\n?(.*)$", text, re.S)
+    if not match:
+        raise HHError(f"{path}: a Job snapshot starts with a YAML block between --- lines")
+    try:
+        front = hhyaml.loads(match.group(1))
+    except hhyaml.YamlError as exc:
+        raise HHError(f"{path}: {exc}") from None
+    if not isinstance(front, dict):
+        raise HHError(f"{path}: the block between --- lines must be a mapping")
+    return front, match.group(2)
+
+
+def requirement_tags(front: dict) -> list:
+    tags = []
+    for key in ("must_haves", "nice_to_haves"):
+        for item in front.get(key) or []:
+            if isinstance(item, dict):
+                tags += [t for t in item.get("tags") or [] if t not in tags]
+    return tags
+
+
+def identify_job(job: dict) -> tuple:
+    """(Job id, site, site id) from the Job's url, or from its company and title when the user gave no link."""
+    if job.get("url"):
+        return web(hhweb.job_id, str(job["url"]))
+    company, title = str(job.get("company") or "").strip(), str(job.get("title") or "").strip()
+    if not company or not title:
+        raise HHError("a Job without a url needs company and title for its id")
+    key = unicodedata.normalize("NFC", f"{company}|{title}").lower()
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
+    return f"j-user-{digest}", "user", digest
+
+
+def check_job(front: dict, body: str, taxonomy: dict, filename=None) -> list:
+    errors = []
+    jid = front.get("id")
+    where = f"job {jid or filename}"
+    known, terms = tag_ids(taxonomy), tag_terms(taxonomy)
+    try:
+        expected, site, site_id = identify_job(front)
+    except HHError as exc:
+        return [f"{where}: {exc}"]
+    if jid != expected:
+        errors.append(f"{where}: id must be {expected} for its url, or for its company and title without one")
+    if filename and filename != f"{expected}.md":
+        errors.append(f"{where}: file name must be {expected}.md")
+    if front.get("site") != site or str(front.get("site_id")) != site_id:
+        errors.append(f"{where}: site and site_id must be {site} and {site_id}")
+    for key in ("title", "company", "location", "salary"):
+        if not str(front.get(key) or "").strip():
+            errors.append(f"{where}: {key} is required (write 'not stated' when the posting has none)")
+    if not DATE.match(str(front.get("read") or "")):
+        errors.append(f"{where}: read must be the date the Job was read")
+    read_with = front.get("read_with")
+    if read_with not in READ_WITH:
+        errors.append(f"{where}: read_with must be one of {', '.join(READ_WITH)}")
+    elif read_with == "fetch" and (not front.get("url") or hhweb.read_method(str(front["url"])) != "fetch"):
+        errors.append(f"{where}: the script never fetched this Job; read_with must be browser, pasted or file")
+    for key in ("must_haves", "nice_to_haves"):
+        items = front.get(key)
+        if not isinstance(items, list):
+            errors.append(f"{where}: {key} must be a list")
+            continue
+        for n, item in enumerate(items, 1):
+            label = f"{where}: {key} {n}"
+            if not isinstance(item, dict) or not str(item.get("text") or "").strip():
+                errors.append(f"{label} needs text")
+                continue
+            tags, proposed = item.get("tags") or [], item.get("proposed") or []
+            if not isinstance(tags, list) or not isinstance(proposed, list):
+                errors.append(f"{label}: tags and proposed must be lists")
+                continue
+            if not tags and not proposed:
+                errors.append(f"{label} needs a Tag, or a proposed term waiting for the user")
+            for tag in tags:
+                if tag not in known:
+                    errors.append(f"{label}: Tag {tag!r} is not in taxonomy.yml; list it under proposed")
+            for term in proposed:
+                if str(term).strip().lower() in terms:
+                    errors.append(f"{label}: {term!r} is already the Tag {terms[str(term).strip().lower()]}")
+    duties = front.get("duties")
+    if not isinstance(duties, list) or not all(str(d).strip() for d in duties):
+        errors.append(f"{where}: duties must be a list of statements")
+    if "## Posting text" not in body:
+        errors.append(f"{where}: the snapshot needs a '## Posting text' section")
+    return errors
+
+
+def render_job(front: dict, text: str) -> str:
+    header = hhyaml.dumps({key: front[key] for key in JOB_ORDER if key in front})
+    summary = " · ".join(str(front.get(k)) for k in ("company", "location", "salary") if front.get(k))
+    return f"---\n{header}---\n\n# {front['title']}\n\n{summary}\n\n## Posting text\n\n{text.strip()}\n"
+
+
+def web(call, *args):
+    try:
+        return call(*args)
+    except hhweb.WebError as exc:
+        raise HHError(str(exc)) from None
+
+
 # ---------------------------------------------------------------- commands
 
 
@@ -963,21 +1080,30 @@ def cmd_questions(args):
         print("No open follow-up questions.")
 
 
-def cmd_extract_text(args):
-    path = Path(args.path).expanduser()
+def file_text(path: Path) -> tuple:
+    """Return (page HTML or None, text) for a Word, HTML, PDF or text file."""
+    if not path.is_file():
+        raise HHError(f"{path} is not a file")
     suffix = path.suffix.lower()
     if suffix == ".docx":
-        print(docx_text(path))
-    elif suffix in (".txt", ".md", ".csv", ".json", ".yml", ".yaml", ".html", ".htm"):
-        print(path.read_text(encoding="utf-8", errors="replace"))
-    elif suffix == ".pdf" and shutil.which("pdftotext"):
-        subprocess.run(["pdftotext", "-layout", str(path), "-"], check=False)
-    elif suffix == ".pdf":
-        raise HHError("no PDF text extractor is installed; read the PDF with your own file reading, "
-                      "or mark the Source partly-readable or unreadable")
-    else:
-        raise HHError(f"{suffix or 'this'} file is not text; read it with your own file reading "
-                      "(images only if you can see images), or mark the Source unreadable")
+        return None, docx_text(path)
+    if suffix in (".html", ".htm"):
+        page = path.read_text(encoding="utf-8", errors="replace")
+        return page, hhweb.html_to_text(page)
+    if suffix in (".txt", ".md", ".csv", ".json", ".yml", ".yaml", ""):
+        return None, path.read_text(encoding="utf-8", errors="replace")
+    if suffix == ".pdf" and shutil.which("pdftotext"):
+        result = subprocess.run(["pdftotext", "-layout", str(path), "-"], capture_output=True, text=True, check=False)
+        return None, result.stdout
+    if suffix == ".pdf":
+        raise HHError("no PDF text extractor is installed; read the PDF with your own file reading and save its "
+                      "text to a .txt file, or record that it could not be read")
+    raise HHError(f"{suffix} files are not text; read it with your own file reading (images only if you can see "
+                  "images) and save the text to a .txt file, or record that it could not be read")
+
+
+def cmd_extract_text(args):
+    print(file_text(Path(args.path).expanduser())[1])
 
 
 def cmd_taxonomy_find(args):
@@ -1009,10 +1135,19 @@ def cmd_validate(args):
         targets = [folder for archived in (False, True) for _, folder in candidate_dirs(root, archived)]
     for folder in targets:
         errors.extend(validate_candidate(folder, known))
+    jobs = [] if args.id else job_files(root)
+    for path in jobs:
+        try:
+            front, body = read_job(path)
+        except HHError as exc:
+            errors.append(str(exc))
+            continue
+        errors.extend(check_job(front, body, taxonomy, path.name))
     if errors:
         print("\n".join(errors))
         return 1
-    print(f"OK: taxonomy.yml and {len(targets)} Candidate folder(s) are valid.")
+    snapshots = f" and {len(jobs)} Job snapshot(s)" if not args.id else ""
+    print(f"OK: taxonomy.yml, {len(targets)} Candidate folder(s){snapshots} are valid.")
     return 0
 
 
@@ -1020,6 +1155,138 @@ def cmd_index(args):
     root = data_dir()
     counts = rebuild_index(root)
     print(f"Rebuilt {root / 'index.sqlite'}: {counts['candidates']} Candidates, {counts['facts']} Facts.")
+
+
+def cmd_job_listing(args):
+    root = data_dir()
+    url = web(hhweb.clean_url, args.url)
+    if hhweb.site_of(url) == "yourator":
+        jobs = web(hhweb.yourator_listing, url, args.page)
+    else:
+        page = web(hhweb.fetch, url)
+        jobs = [{"id": jid, "title": title, "url": link} for jid, title, link in hhweb.listing_links(page, url)]
+    saved = 0
+    for job in jobs:
+        exists = (root / "jobs" / f"{job['id']}.md").exists()
+        saved += exists
+        details = " | ".join(job[k] for k in ("title", "company", "location", "salary") if job.get(k))
+        print(f"{'*' if exists else ' '} {job['id']}  {details}  {job['url']}")
+    if not jobs:
+        print("No Jobs found on this page.")
+    else:
+        print(f"{len(jobs)} Jobs" + (f"; {saved} already saved (*)" if saved else ""))
+
+
+def cmd_job_fetch(args):
+    root = data_dir()
+    url = web(hhweb.clean_url, args.url) if args.url else None
+    if args.file:
+        page, text = file_text(Path(args.file).expanduser())
+        read_with = "file, pasted or browser; say which in job save"
+    elif url:
+        page, read_with = web(hhweb.fetch, url), "fetch"
+        text = hhweb.html_to_text(page)
+    else:
+        raise HHError("give the Job's url, a --file with its content, or both")
+    if url:
+        jid, site, _ = web(hhweb.job_id, url)
+        snapshot = root / "jobs" / f"{jid}.md"
+        print(f"Job: {jid} ({site})")
+        print(f"URL: {url}")
+        print(f"Snapshot: {'already saved at ' + str(snapshot) if snapshot.exists() else 'not saved yet'}")
+    else:
+        print("Job: no link given; job save gives it an id from its company and title")
+    print(f"Read with: {read_with}")
+    posting = hhweb.job_posting(page) if page else None
+    if posting:
+        fields = hhweb.posting_fields(posting)
+        print("\n## Structured data (JSON-LD)\n")
+        for key in ("title", "company", "location", "salary", "employment_type", "posted", "valid_through"):
+            print(f"- {key}: {fields[key] or '-'}")
+    print("\n## Page text\n")
+    print(text.strip()[:args.max_chars])
+
+
+def cmd_job_save(args):
+    root = data_dir()
+    taxonomy = load_taxonomy(root)
+    data = read_payload(args)
+    if not isinstance(data, dict):
+        raise HHError("the Job must be a mapping")
+    url = web(hhweb.clean_url, str(data["url"])) if data.get("url") else None
+    jid, site, site_id = identify_job({**data, "url": url})
+    path = root / "jobs" / f"{jid}.md"
+    if path.exists() and not args.replace:
+        raise HHError(f"{path} already exists; pass --replace to save a new reading over it")
+    default_read = "fetch" if url and hhweb.read_method(url) == "fetch" else None
+    front = {
+        "id": jid, "site": site, "site_id": site_id, **({"url": url} if url else {}),
+        **{k: data[k] for k in ("title", "company", "location", "salary", "work_mode", "employment_type", "posted")
+           if data.get(k) not in (None, "")},
+        "read": today(), "read_with": data.get("read_with") or default_read,
+        "must_haves": data.get("must_haves") or [], "nice_to_haves": data.get("nice_to_haves") or [],
+        "duties": data.get("duties") or [],
+    }
+    for key in ("must_haves", "nice_to_haves"):
+        front[key] = [
+            {"text": item.get("text"), "tags": item.get("tags") or [],
+             **({"proposed": item["proposed"]} if item.get("proposed") else {})}
+            if isinstance(item, dict) else item
+            for item in front[key]
+        ]
+    text = str(data.get("text") or "").strip()
+    if not text:
+        raise HHError("text (the posting text as read) is required")
+    body = render_job(front, text)
+    errors = check_job(front, body, taxonomy, path.name)
+    if errors:
+        raise HHError("nothing written:\n  " + "\n  ".join(errors))
+    path.write_text(body, encoding="utf-8")
+    proposed = sum(len(i.get("proposed") or []) for k in ("must_haves", "nice_to_haves") for i in front[k])
+    print(f"{jid}  {path}")
+    print(f"{len(front['must_haves'])} must-haves, {len(front['nice_to_haves'])} nice-to-haves, "
+          f"{len(front['duties'])} duties, {len(requirement_tags(front))} Tags"
+          + (f", {proposed} proposed terms" if proposed else ""))
+
+
+def cmd_job_list(args):
+    root = data_dir()
+    paths = job_files(root)
+    for path in paths:
+        front, _ = read_job(path)
+        print(f"{front.get('id')}  {front.get('read')}  {front.get('title')} · {front.get('company')}  "
+              f"({len(front.get('must_haves') or [])} must-haves, {len(front.get('nice_to_haves') or [])} nice-to-haves)")
+    if not paths:
+        print("No Job snapshots yet.")
+
+
+def cmd_job_accept(args):
+    root = data_dir()
+    taxonomy = load_taxonomy(root)
+    tag = resolve_tag(taxonomy, args.tag)
+    term = args.term.strip().lower()
+    changed = 0
+    for path in job_files(root):
+        front, body = read_job(path)
+        hits = 0
+        for key in ("must_haves", "nice_to_haves"):
+            for item in front.get(key) or []:
+                proposed = [p for p in item.get("proposed") or [] if str(p).strip().lower() != term]
+                if len(proposed) == len(item.get("proposed") or []):
+                    continue
+                hits += 1
+                item["tags"] = list(item.get("tags") or []) + ([tag] if tag not in (item.get("tags") or []) else [])
+                if proposed:
+                    item["proposed"] = proposed
+                else:
+                    item.pop("proposed", None)
+        if hits:
+            header = hhyaml.dumps({key: front[key] for key in JOB_ORDER if key in front})
+            path.write_text(f"---\n{header}---\n{body}", encoding="utf-8")
+            changed += 1
+            print(f"{front['id']}: {args.term!r} → {tag} in {hits} requirement(s)")
+    if not changed:
+        print(f"No Job snapshot proposes {args.term!r}.")
 
 
 def matched_facts(con, cid: str, tag: str) -> list:
@@ -1200,7 +1467,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("term")
     p.set_defaults(func=cmd_taxonomy_find)
 
-    p = sub.add_parser("validate", help="check taxonomy.yml and Candidate folders")
+    job = sub.add_parser("job", help="read Listings and Jobs, and save Job snapshots")
+    jsub = job.add_subparsers(dest="action", required=True)
+    p = jsub.add_parser("listing", help="list the Jobs on a Listing page")
+    p.add_argument("url")
+    p.add_argument("--page", type=int, default=1, help="result page, for sites read through their JSON")
+    p.set_defaults(func=cmd_job_listing)
+    p = jsub.add_parser("fetch", help="print a Job's structured data and text from its url or a file")
+    p.add_argument("url", nargs="?")
+    p.add_argument("--file", help="the Job's content as an HTML, Word, PDF or text file (pasted text saved to a file)")
+    p.add_argument("--max-chars", type=int, default=20000)
+    p.set_defaults(func=cmd_job_fetch)
+    p = jsub.add_parser("save", help="save a Job snapshot from JSON or YAML on stdin")
+    p.add_argument("--file")
+    p.add_argument("--replace", action="store_true", help="save a new reading over an existing snapshot")
+    p.set_defaults(func=cmd_job_save)
+    jsub.add_parser("list", help="list saved Job snapshots").set_defaults(func=cmd_job_list)
+    p = jsub.add_parser("accept", help="turn a proposed term into a Tag in every Job snapshot, once the Tag exists")
+    p.add_argument("term")
+    p.add_argument("tag")
+    p.set_defaults(func=cmd_job_accept)
+
+    p = sub.add_parser("validate", help="check taxonomy.yml, Candidate folders and Job snapshots")
     p.add_argument("id", nargs="?")
     p.set_defaults(func=cmd_validate)
 

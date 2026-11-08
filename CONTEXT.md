@@ -62,13 +62,16 @@ Updated from Feedback.
 _Avoid_: plan, roadmap
 
 **Listing**:
-A web page that lists many jobs, such as a search result page on 104 or
-CakeResume.
+Many jobs together: a web page that lists them, such as a search result page
+on 104 or CakeResume, or a file or copied text that holds several.
 _Avoid_: feed, board
 
 **Job**:
-One job posting, stored as a snapshot of its content at the time it was read.
-Identified by `j-<site>-<site id>`.
+One job posting, stored as a snapshot of its content at the time it was read:
+must-haves and nice-to-haves with Tags, duties, salary, location, and the
+posting text. Identified by `j-<site>-<site id>`; a page on any other site uses
+its host name and a hash of its URL, and a Job the user gave without a link
+uses `j-user-` and a hash of its company and title.
 _Avoid_: JD, position, opening
 
 **Application**:

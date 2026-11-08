@@ -36,7 +36,12 @@ python3 <skill folder>/scripts/hh.py <command>
 | `fact add <id>` / `fact update <id> <fact>` | Add Facts, or merge fields into one, from JSON or YAML on stdin; ids and evidence levels are filled in, and nothing is written if any check fails |
 | `questions [<id>]` | List open follow-up questions |
 | `taxonomy find <term>` | Find Tags by id, label or alias |
-| `validate [<id>]` | Check `taxonomy.yml` and Candidate folders |
+| `job listing <url> [--page N]` | List the Jobs on a Yourator or careers Listing page with their Job ids; `*` marks Jobs already saved |
+| `job fetch [<url>] [--file <file>]` | Print a Job's structured data and text from its link or from a file (HTML, Word, PDF, text), its Job id, and whether a snapshot exists |
+| `job save [--replace]` | Save a Job snapshot from JSON or YAML on stdin; nothing is written if any check fails |
+| `job list` | List saved Job snapshots |
+| `job accept <term> <tag>` | Turn a proposed term into a Tag in every Job snapshot, once the Tag is in `taxonomy.yml` |
+| `validate [<id>]` | Check `taxonomy.yml`, Candidate folders and Job snapshots |
 | `index` | Delete and rebuild `index.sqlite` |
 | `search candidates` / `search facts` | Filter the Index (see Search) |
 | `query "<SELECT ...>"` | Run a read-only SQL query on the Index |
@@ -63,12 +68,14 @@ Searches rebuild the Index first when any file changed. Run `validate` after edi
       feedback.md                  feedback log and fixes
       resume.zh.md  resume.zh.pdf
       resume.en.md  resume.en.pdf
-  jobs/<job-id>.md                 job snapshot
+  jobs/<job-id>.md                 Job snapshot: requirements with Tags, duties, salary, location, posting text
   companies/<company-slug>.md      company notes built from feedback
   archive/                         archived candidates
 ```
 
 Ids are zero-padded and assigned by the script: `c-001`, `s-001`, `f-001`, `q-001`. `<slug>` is the Candidate's name as given, lowercased, with spaces turned into hyphens and punctuation removed; Chinese characters stay as they are.
+
+A Job id comes from its URL: `j-104-<job code>`, `j-cakeresume-<company>-<job slug>`, `j-yourator-<number>`, `j-linkedin-<number>`. A page on any other site uses its host name and a hash of its URL, such as `j-jobs-lever-co-91b1946a`. A Job the user gave without a link uses a hash of its company and title, such as `j-user-3f9a1c2e`.
 
 ## File formats
 
@@ -115,7 +122,51 @@ YAML files use a plain subset: block mappings and lists, one-line `[...]` and `{
 
 **Import report** (`imports/<date>-<source>.md`): sections Facts extracted, Missing fields, Conflicts, Rejected, Proposed Tags and Follow-up questions. Questions are checklist lines, `- [ ] q-004: <question>`; an answered one becomes `- [x] q-004: <question> — answered in s-007`.
 
+**Job snapshot** (`jobs/<job-id>.md`): a YAML block between `---` lines, then the title, a summary line and `## Posting text` with the posting as read.
+
+```yaml
+---
+id: j-yourator-39119         # filled in from url
+site: yourator
+site_id: "39119"
+url: https://www.yourator.co/companies/profetai/jobs/39119   # left out when the user gave no link
+title: Senior Python Backend Engineer
+company: Example AI
+location: 台北市信義區
+salary: 面議（經常性薪資達4萬元）  # "not stated" when the posting has none
+work_mode: 部分遠端工作             # optional, like employment_type and posted
+read: 2026-11-08             # filled in
+read_with: fetch             # fetch | browser | pasted | file
+must_haves:
+  - text: 熟悉 Python 開發
+    tags: [skill/python]
+  - text: 熟悉 RESTful API 設計，具備 gRPC 經驗尤佳
+    tags: [skill/api-design]
+    proposed: [gRPC]         # terms with no Tag yet, waiting for the user
+nice_to_haves:
+  - text: 具備 Docker 容器化部署經驗
+    tags: [tool/docker]
+duties:
+  - 設計與開發 AI 平台核心 API
+---
+```
+
+Every requirement has at least one Tag or one proposed term. Requirements keep the posting's wording and language.
+
 ## Workflows
+
+### Sort what the user gives
+
+The user may give anything, in any form: links, PDF, Word or HTML files, photos and screenshots, or a block of copied text. First decide what it is:
+
+| It is | Such as | Workflow |
+|---|---|---|
+| About a Candidate | A resume, notes, work logs, certificates, achievement records, a GitHub link | Import a Source, for the Candidate it is about; ask when that is unclear |
+| One Job | A posting's link, its PDF or HTML, a screenshot, its copied text | Read Jobs, from step 2 |
+| Many Jobs | A copied search result page, a listing link, a file with several postings | Read Jobs, from step 1 |
+| Several of these | An email with a posting and notes about the Candidate | Split it and handle each part |
+
+Read files with `extract-text` (Word, HTML, text, and PDF when `pdftotext` is installed) or with your own file reading (PDF, photos and screenshots, only if you can see images). Say what you could not read; never guess it.
 
 ### Create a Candidate
 
@@ -171,6 +222,34 @@ When new input contradicts a Fact, write the new Fact, set both to `state: confl
 - For a one-sentence request, turn it into these filters. For example, "Candidates with Python and finance background and 5+ years of experience" is `search candidates --tag python --industry finance --min-years 5`.
 - For anything the filters cannot express, use `query` on the Index tables: `candidates`, `sources`, `facts`, `fact_tags`, `fact_sources`, `tags`, `tag_terms`, `questions`, and the view `candidate_tags` (Tags on active, sourced Facts).
 
+### Read Jobs
+
+Jobs come from links, from files and from copied text. For links, each site is read this way:
+
+| Site | Method |
+|---|---|
+| Yourator | The script fetches it: Listings through the site's JSON (`job listing`, `--page` for more results), Jobs from the page's schema.org JobPosting data and text (`job fetch`) |
+| Company careers pages | The script fetches the page, following its robots.txt; when the site refuses, read it like 104 |
+| 104 | Guided: 104 refuses automated requests, including its robots.txt, so the user copies Listings and Jobs are read in a browser or from copied text |
+| CakeResume | Guided, like 104: it shows a bot check to automated requests |
+| LinkedIn | Only a page open in the user's signed-in browser, or text the user pastes; never fetched, never in bulk |
+
+The script names itself in its User-Agent and follows robots.txt. When a site refuses, shows a CAPTCHA, a bot check or a sign-in wall, in the script or in a browser, stop and ask the user to handle it or paste the content. Never disguise requests or work around a check.
+
+1. **Listing**:
+   - Yourator and careers pages: `job listing <url>` lists each Job's title, company, location, salary where the page shows them, and link.
+   - 104 and CakeResume: ask the user to open the search results in their own browser, scroll until every Job has loaded (104 keeps loading more as you scroll; CakeResume may need its next-page button), select all, copy, and paste the text here. List each Job's title, company, location and salary from it. The copied text has no links, so ask the user for the links of the Jobs worth reading, or open them by title in a browser you can use.
+   - LinkedIn: the user pastes the results, or you read the page they have open in their signed-in browser.
+   - A file or text with many Jobs: list them from it the same way. When it already holds each Job's full posting, go straight to step 3 for the ones that pass.
+
+   Screen by title and company against what the user is looking for; skip Jobs marked `*` (already saved) unless the user wants a new reading.
+2. **Job**:
+   - A link the script may fetch: `job fetch <url>`.
+   - A file, or text copied from a browser or pasted by the user: save pasted text to a temporary file outside any repository, then `job fetch [<url>] --file <file>`. HTML files also give the posting's structured data. Add the link when there is one, for the Job id and whether a snapshot exists; without one, `job save` makes the id from company and title.
+   - A photo or screenshot: read it if you can see images, save the text to a file, and use `--file`.
+3. **Snapshot**: write must-haves, nice-to-haves and duties from the posting, in its wording. Tag each requirement with `taxonomy find`; a term with no Tag goes under `proposed`. Pipe the snapshot as JSON to `job save`, with `text` set to the posting text, `url` when there is one, and `read_with` set to `browser`, `pasted` or `file` when the script did not fetch it.
+4. **Report** the saved Jobs and every proposed term. When the user accepts a term, add the Tag to `taxonomy.yml` and run `job accept <term> <tag>`.
+
 ## Rules
 
 1. **Every Fact cites its Source.** Record which Source, and where in it, each Fact came from. Content without a Source is not written.
@@ -181,7 +260,8 @@ When new input contradicts a Fact, write the new Fact, set both to `state: confl
 6. **Archive, don't delete.** Deleting a candidate moves their folder to `archive/`.
 7. **Success ratings are estimates.** Present them as high / medium / low with reasons, never as a real probability.
 8. **LinkedIn by hand only.** Read LinkedIn only from pages the user has open in their signed-in browser or text they paste. Never scrape it in bulk. If any site shows a CAPTCHA or sign-in wall, ask the user to handle it or paste the content.
-9. **Two resumes per job.** Write a Chinese and an English version; use `glossary.yml` so names are translated the same way every time.
+9. **Read job sites politely.** Follow robots.txt, identify the script honestly, and never work around a refusal or bot check.
+10. **Two resumes per job.** Write a Chinese and an English version; use `glossary.yml` so names are translated the same way every time.
 
 ## Application stages
 
