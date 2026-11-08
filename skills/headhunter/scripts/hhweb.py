@@ -3,8 +3,8 @@ turning Listing and Job pages into plain data.
 
 Fetching identifies itself with a User-Agent that names this project, honors
 robots.txt, and stops at any refusal or bot check instead of working around
-it. Sites that block automated reading are read in a browser or from pasted
-text, and their HTML or text is handed to the parsers here.
+it. Sites that block automated reading are read in a browser or from text the
+user copies; the agent follows SKILL.md for those.
 """
 
 from __future__ import annotations
@@ -106,8 +106,8 @@ def refusal(url: str) -> str:
     site = site_of(url)
     if site == "linkedin":
         return SITES[site]["why"]
-    return ("Open the page in a browser and pass its HTML with --html, "
-            "or have the user paste its text and pass it with --text")
+    return ("Read it in a browser, or ask the user to copy the page text; "
+            "pass a Job's text with --text")
 
 
 def _get(url: str) -> str:

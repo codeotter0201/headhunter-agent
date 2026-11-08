@@ -36,8 +36,8 @@ python3 <skill folder>/scripts/hh.py <command>
 | `fact add <id>` / `fact update <id> <fact>` | Add Facts, or merge fields into one, from JSON or YAML on stdin; ids and evidence levels are filled in, and nothing is written if any check fails |
 | `questions [<id>]` | List open follow-up questions |
 | `taxonomy find <term>` | Find Tags by id, label or alias |
-| `job listing <url> [--page N] [--html <file>]` | List the Jobs on a Listing page with their Job ids; `*` marks Jobs already saved |
-| `job fetch <url> [--html <file> \| --text <file>]` | Print a Job page's structured data and text, its Job id, and whether a snapshot exists |
+| `job listing <url> [--page N]` | List the Jobs on a Yourator or careers Listing page with their Job ids; `*` marks Jobs already saved |
+| `job fetch <url> [--text <file>]` | Print a Job page's structured data and text, its Job id, and whether a snapshot exists; with `--text`, use text copied from a browser or pasted |
 | `job save [--replace]` | Save a Job snapshot from JSON or YAML on stdin; nothing is written if any check fails |
 | `job list` | List saved Job snapshots |
 | `job accept <term> <tag>` | Turn a proposed term into a Tag in every Job snapshot, once the Tag is in `taxonomy.yml` |
@@ -216,27 +216,20 @@ How each site is read:
 | Site | Method |
 |---|---|
 | Yourator | The script fetches it: Listings through the site's JSON (`job listing`, `--page` for more results), Jobs from the page's schema.org JobPosting data and text (`job fetch`) |
-| Company careers pages | The script fetches the page, following its robots.txt; when the site refuses, read it in a browser |
-| 104 | In a browser: 104 refuses automated requests, including its robots.txt |
-| CakeResume | In a browser: it shows a bot check to automated requests |
+| Company careers pages | The script fetches the page, following its robots.txt; when the site refuses, read it like 104 |
+| 104 | Guided: 104 refuses automated requests, including its robots.txt, so the user copies Listings and Jobs are read in a browser or from copied text |
+| CakeResume | Guided, like 104: it shows a bot check to automated requests |
 | LinkedIn | Only a page open in the user's signed-in browser, or text the user pastes; never fetched, never in bulk |
 
 The script names itself in its User-Agent and follows robots.txt. When a site refuses, shows a CAPTCHA, a bot check or a sign-in wall, in the script or in a browser, stop and ask the user to handle it or paste the content. Never disguise requests or work around a check.
 
-To read a page in a browser, open it with the browser you have, the user's own browser when they prefer, and wait until the jobs are shown. Run this in the page to collect what the script reads (JobPosting data, links and visible text), save the result to a temporary file outside any repository, and pass it with `--html`:
+1. **Listing**:
+   - Yourator and careers pages: `job listing <url>` lists each Job's title, company, location, salary where the page shows them, and link.
+   - 104 and CakeResume: ask the user to open the search results in their own browser, scroll until every Job has loaded (104 keeps loading more as you scroll; CakeResume may need its next-page button), select all, copy, and paste the text here. List each Job's title, company, location and salary from it. The copied text has no links, so ask the user for the links of the Jobs worth reading, or open them by title in a browser you can use.
+   - LinkedIn: the user pastes the results, or you read the page they have open in their signed-in browser.
 
-```js
-const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-[...document.querySelectorAll('script[type="application/ld+json"]')].map(s => s.outerHTML).join('\n')
-  + '\n' + [...document.querySelectorAll('a[href]')]
-    .map(a => `<a href="${a.href.replace(/"/g, '%22')}">${esc(a.innerText.replace(/\s+/g, ' ').trim())}</a>`).join('\n')
-  + '\n<main>' + esc(document.body.innerText) + '</main>'
-```
-
-Text the user pastes goes to a file passed with `--text`. On a Listing read in a browser, each Job shows its link text, which usually holds the title, company, location and salary together.
-
-1. **Listing**: `job listing <url>` lists title, company, location, salary and link where the page shows them. Screen by title and company against what the user is looking for; skip Jobs marked `*` unless the user wants a new reading.
-2. **Job**: `job fetch <url>` for each Job that passes.
+   Screen by title and company against what the user is looking for; skip Jobs marked `*` (already saved) unless the user wants a new reading.
+2. **Job**: `job fetch <url>` for each Job that passes. For 104, CakeResume and LinkedIn, get the page text from a browser you can use or ask the user to copy it, save it to a temporary file outside any repository, and run `job fetch <url> --text <file>` for the Job id and whether a snapshot exists.
 3. **Snapshot**: write must-haves, nice-to-haves and duties from the posting, in its wording. Tag each requirement with `taxonomy find`; a term with no Tag goes under `proposed`. Pipe the snapshot as JSON to `job save`, with `text` set to the posting text and `read_with` set to `browser` or `pasted` when the script did not fetch it.
 4. **Report** the saved Jobs and every proposed term. When the user accepts a term, add the Tag to `taxonomy.yml` and run `job accept <term> <tag>`.
 

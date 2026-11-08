@@ -1138,10 +1138,7 @@ def cmd_index(args):
 def cmd_job_listing(args):
     root = data_dir()
     url = web(hhweb.clean_url, args.url)
-    if args.html:
-        page = Path(args.html).read_text(encoding="utf-8", errors="replace")
-        jobs = [{"id": jid, "title": title, "url": link} for jid, title, link in hhweb.listing_links(page, url)]
-    elif hhweb.site_of(url) == "yourator":
+    if hhweb.site_of(url) == "yourator":
         jobs = web(hhweb.yourator_listing, url, args.page)
     else:
         page = web(hhweb.fetch, url)
@@ -1163,10 +1160,8 @@ def cmd_job_fetch(args):
     url = web(hhweb.clean_url, args.url)
     jid, site, _ = web(hhweb.job_id, url)
     if args.text:
-        page, text, read_with = None, Path(args.text).read_text(encoding="utf-8", errors="replace"), "pasted"
-    elif args.html:
-        page, read_with = Path(args.html).read_text(encoding="utf-8", errors="replace"), "browser"
-        text = hhweb.html_to_text(page)
+        page, text = None, Path(args.text).read_text(encoding="utf-8", errors="replace")
+        read_with = "browser or pasted; say which in job save"
     else:
         page, read_with = web(hhweb.fetch, url), "fetch"
         text = hhweb.html_to_text(page)
@@ -1450,13 +1445,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = jsub.add_parser("listing", help="list the Jobs on a Listing page")
     p.add_argument("url")
     p.add_argument("--page", type=int, default=1, help="result page, for sites read through their JSON")
-    p.add_argument("--html", help="the Listing's HTML saved from a browser")
     p.set_defaults(func=cmd_job_listing)
     p = jsub.add_parser("fetch", help="print a Job page's structured data and text")
     p.add_argument("url")
-    group = p.add_mutually_exclusive_group()
-    group.add_argument("--html", help="the Job's HTML saved from a browser")
-    group.add_argument("--text", help="the Job's text pasted by the user")
+    p.add_argument("--text", help="the Job's text, copied from a browser or pasted by the user")
     p.add_argument("--max-chars", type=int, default=20000)
     p.set_defaults(func=cmd_job_fetch)
     p = jsub.add_parser("save", help="save a Job snapshot from JSON or YAML on stdin")
