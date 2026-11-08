@@ -57,9 +57,21 @@ used so every English resume translates them the same way.
 _Avoid_: dictionary, translation memory
 
 **Strategy**:
-The Candidate's current plan: target roles, positioning, and what to strengthen.
-Updated from Feedback.
+The Candidate's current plan: which Roles to pursue and in what order,
+positioning, and what to strengthen. Updated from Feedback.
 _Avoid_: plan, roadmap
+
+**Role**:
+A kind of job a Candidate pursues, such as "backend engineer": title, target
+level, industries, and must-have and nice-to-have requirements. A Candidate can
+have several Roles at once.
+_Avoid_: target role, persona, track
+
+**Role profile**:
+The Candidate's case for one Role: a positioning summary, the Facts that
+support each requirement with reasons, and the gaps. It cites Facts by id and
+never changes them.
+_Avoid_: role resume, role summary
 
 **Listing**:
 Many jobs together: a web page that lists them, such as a search result page
