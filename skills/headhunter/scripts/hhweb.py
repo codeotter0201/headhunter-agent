@@ -107,7 +107,7 @@ def refusal(url: str) -> str:
     if site == "linkedin":
         return SITES[site]["why"]
     return ("Read it in a browser, or ask the user to copy the page text; "
-            "pass a Job's text with --text")
+            "pass a Job's text with --file")
 
 
 def _get(url: str) -> str:

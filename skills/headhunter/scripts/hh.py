@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -60,7 +61,7 @@ FACT_ORDER = (
 REPORT_SECTIONS = (
     "Facts extracted", "Missing fields", "Conflicts", "Rejected", "Proposed Tags", "Follow-up questions",
 )
-READ_WITH = ("fetch", "browser", "pasted")
+READ_WITH = ("fetch", "browser", "pasted", "file")
 JOB_ORDER = (
     "id", "site", "site_id", "url", "title", "company", "location", "salary", "work_mode",
     "employment_type", "posted", "read", "read_with", "must_haves", "nice_to_haves", "duties",
@@ -772,17 +773,29 @@ def requirement_tags(front: dict) -> list:
     return tags
 
 
+def identify_job(job: dict) -> tuple:
+    """(Job id, site, site id) from the Job's url, or from its company and title when the user gave no link."""
+    if job.get("url"):
+        return web(hhweb.job_id, str(job["url"]))
+    company, title = str(job.get("company") or "").strip(), str(job.get("title") or "").strip()
+    if not company or not title:
+        raise HHError("a Job without a url needs company and title for its id")
+    key = unicodedata.normalize("NFC", f"{company}|{title}").lower()
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
+    return f"j-user-{digest}", "user", digest
+
+
 def check_job(front: dict, body: str, taxonomy: dict, filename=None) -> list:
     errors = []
     jid = front.get("id")
     where = f"job {jid or filename}"
     known, terms = tag_ids(taxonomy), tag_terms(taxonomy)
     try:
-        expected, site, site_id = hhweb.job_id(str(front.get("url") or ""))
-    except hhweb.WebError as exc:
+        expected, site, site_id = identify_job(front)
+    except HHError as exc:
         return [f"{where}: {exc}"]
     if jid != expected:
-        errors.append(f"{where}: id must be {expected} for its url")
+        errors.append(f"{where}: id must be {expected} for its url, or for its company and title without one")
     if filename and filename != f"{expected}.md":
         errors.append(f"{where}: file name must be {expected}.md")
     if front.get("site") != site or str(front.get("site_id")) != site_id:
@@ -795,8 +808,8 @@ def check_job(front: dict, body: str, taxonomy: dict, filename=None) -> list:
     read_with = front.get("read_with")
     if read_with not in READ_WITH:
         errors.append(f"{where}: read_with must be one of {', '.join(READ_WITH)}")
-    elif read_with == "fetch" and hhweb.read_method(str(front["url"])) != "fetch":
-        errors.append(f"{where}: {site} is never fetched by the script; read_with must be browser or pasted")
+    elif read_with == "fetch" and (not front.get("url") or hhweb.read_method(str(front["url"])) != "fetch"):
+        errors.append(f"{where}: the script never fetched this Job; read_with must be browser, pasted or file")
     for key in ("must_haves", "nice_to_haves"):
         items = front.get(key)
         if not isinstance(items, list):
@@ -1067,21 +1080,30 @@ def cmd_questions(args):
         print("No open follow-up questions.")
 
 
-def cmd_extract_text(args):
-    path = Path(args.path).expanduser()
+def file_text(path: Path) -> tuple:
+    """Return (page HTML or None, text) for a Word, HTML, PDF or text file."""
+    if not path.is_file():
+        raise HHError(f"{path} is not a file")
     suffix = path.suffix.lower()
     if suffix == ".docx":
-        print(docx_text(path))
-    elif suffix in (".txt", ".md", ".csv", ".json", ".yml", ".yaml", ".html", ".htm"):
-        print(path.read_text(encoding="utf-8", errors="replace"))
-    elif suffix == ".pdf" and shutil.which("pdftotext"):
-        subprocess.run(["pdftotext", "-layout", str(path), "-"], check=False)
-    elif suffix == ".pdf":
-        raise HHError("no PDF text extractor is installed; read the PDF with your own file reading, "
-                      "or mark the Source partly-readable or unreadable")
-    else:
-        raise HHError(f"{suffix or 'this'} file is not text; read it with your own file reading "
-                      "(images only if you can see images), or mark the Source unreadable")
+        return None, docx_text(path)
+    if suffix in (".html", ".htm"):
+        page = path.read_text(encoding="utf-8", errors="replace")
+        return page, hhweb.html_to_text(page)
+    if suffix in (".txt", ".md", ".csv", ".json", ".yml", ".yaml", ""):
+        return None, path.read_text(encoding="utf-8", errors="replace")
+    if suffix == ".pdf" and shutil.which("pdftotext"):
+        result = subprocess.run(["pdftotext", "-layout", str(path), "-"], capture_output=True, text=True, check=False)
+        return None, result.stdout
+    if suffix == ".pdf":
+        raise HHError("no PDF text extractor is installed; read the PDF with your own file reading and save its "
+                      "text to a .txt file, or record that it could not be read")
+    raise HHError(f"{suffix} files are not text; read it with your own file reading (images only if you can see "
+                  "images) and save the text to a .txt file, or record that it could not be read")
+
+
+def cmd_extract_text(args):
+    print(file_text(Path(args.path).expanduser())[1])
 
 
 def cmd_taxonomy_find(args):
@@ -1157,19 +1179,24 @@ def cmd_job_listing(args):
 
 def cmd_job_fetch(args):
     root = data_dir()
-    url = web(hhweb.clean_url, args.url)
-    jid, site, _ = web(hhweb.job_id, url)
-    if args.text:
-        page, text = None, Path(args.text).read_text(encoding="utf-8", errors="replace")
-        read_with = "browser or pasted; say which in job save"
-    else:
+    url = web(hhweb.clean_url, args.url) if args.url else None
+    if args.file:
+        page, text = file_text(Path(args.file).expanduser())
+        read_with = "file, pasted or browser; say which in job save"
+    elif url:
         page, read_with = web(hhweb.fetch, url), "fetch"
         text = hhweb.html_to_text(page)
-    snapshot = root / "jobs" / f"{jid}.md"
-    print(f"Job: {jid} ({site})")
-    print(f"URL: {url}")
+    else:
+        raise HHError("give the Job's url, a --file with its content, or both")
+    if url:
+        jid, site, _ = web(hhweb.job_id, url)
+        snapshot = root / "jobs" / f"{jid}.md"
+        print(f"Job: {jid} ({site})")
+        print(f"URL: {url}")
+        print(f"Snapshot: {'already saved at ' + str(snapshot) if snapshot.exists() else 'not saved yet'}")
+    else:
+        print("Job: no link given; job save gives it an id from its company and title")
     print(f"Read with: {read_with}")
-    print(f"Snapshot: {'already saved at ' + str(snapshot) if snapshot.exists() else 'not saved yet'}")
     posting = hhweb.job_posting(page) if page else None
     if posting:
         fields = hhweb.posting_fields(posting)
@@ -1186,14 +1213,14 @@ def cmd_job_save(args):
     data = read_payload(args)
     if not isinstance(data, dict):
         raise HHError("the Job must be a mapping")
-    url = web(hhweb.clean_url, str(data.get("url") or ""))
-    jid, site, site_id = web(hhweb.job_id, url)
+    url = web(hhweb.clean_url, str(data["url"])) if data.get("url") else None
+    jid, site, site_id = identify_job({**data, "url": url})
     path = root / "jobs" / f"{jid}.md"
     if path.exists() and not args.replace:
         raise HHError(f"{path} already exists; pass --replace to save a new reading over it")
-    default_read = "fetch" if hhweb.read_method(url) == "fetch" else None
+    default_read = "fetch" if url and hhweb.read_method(url) == "fetch" else None
     front = {
-        "id": jid, "site": site, "site_id": site_id, "url": url,
+        "id": jid, "site": site, "site_id": site_id, **({"url": url} if url else {}),
         **{k: data[k] for k in ("title", "company", "location", "salary", "work_mode", "employment_type", "posted")
            if data.get(k) not in (None, "")},
         "read": today(), "read_with": data.get("read_with") or default_read,
@@ -1446,9 +1473,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("url")
     p.add_argument("--page", type=int, default=1, help="result page, for sites read through their JSON")
     p.set_defaults(func=cmd_job_listing)
-    p = jsub.add_parser("fetch", help="print a Job page's structured data and text")
-    p.add_argument("url")
-    p.add_argument("--text", help="the Job's text, copied from a browser or pasted by the user")
+    p = jsub.add_parser("fetch", help="print a Job's structured data and text from its url or a file")
+    p.add_argument("url", nargs="?")
+    p.add_argument("--file", help="the Job's content as an HTML, Word, PDF or text file (pasted text saved to a file)")
     p.add_argument("--max-chars", type=int, default=20000)
     p.set_defaults(func=cmd_job_fetch)
     p = jsub.add_parser("save", help="save a Job snapshot from JSON or YAML on stdin")

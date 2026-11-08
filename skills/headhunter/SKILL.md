@@ -37,7 +37,7 @@ python3 <skill folder>/scripts/hh.py <command>
 | `questions [<id>]` | List open follow-up questions |
 | `taxonomy find <term>` | Find Tags by id, label or alias |
 | `job listing <url> [--page N]` | List the Jobs on a Yourator or careers Listing page with their Job ids; `*` marks Jobs already saved |
-| `job fetch <url> [--text <file>]` | Print a Job page's structured data and text, its Job id, and whether a snapshot exists; with `--text`, use text copied from a browser or pasted |
+| `job fetch [<url>] [--file <file>]` | Print a Job's structured data and text from its link or from a file (HTML, Word, PDF, text), its Job id, and whether a snapshot exists |
 | `job save [--replace]` | Save a Job snapshot from JSON or YAML on stdin; nothing is written if any check fails |
 | `job list` | List saved Job snapshots |
 | `job accept <term> <tag>` | Turn a proposed term into a Tag in every Job snapshot, once the Tag is in `taxonomy.yml` |
@@ -75,7 +75,7 @@ Searches rebuild the Index first when any file changed. Run `validate` after edi
 
 Ids are zero-padded and assigned by the script: `c-001`, `s-001`, `f-001`, `q-001`. `<slug>` is the Candidate's name as given, lowercased, with spaces turned into hyphens and punctuation removed; Chinese characters stay as they are.
 
-A Job id comes from its URL: `j-104-<job code>`, `j-cakeresume-<company>-<job slug>`, `j-yourator-<number>`, `j-linkedin-<number>`. A page on any other site uses its host name and a hash of its URL, such as `j-jobs-lever-co-91b1946a`.
+A Job id comes from its URL: `j-104-<job code>`, `j-cakeresume-<company>-<job slug>`, `j-yourator-<number>`, `j-linkedin-<number>`. A page on any other site uses its host name and a hash of its URL, such as `j-jobs-lever-co-91b1946a`. A Job the user gave without a link uses a hash of its company and title, such as `j-user-3f9a1c2e`.
 
 ## File formats
 
@@ -129,14 +129,14 @@ YAML files use a plain subset: block mappings and lists, one-line `[...]` and `{
 id: j-yourator-39119         # filled in from url
 site: yourator
 site_id: "39119"
-url: https://www.yourator.co/companies/profetai/jobs/39119
+url: https://www.yourator.co/companies/profetai/jobs/39119   # left out when the user gave no link
 title: Senior Python Backend Engineer
 company: Example AI
 location: 台北市信義區
 salary: 面議（經常性薪資達4萬元）  # "not stated" when the posting has none
 work_mode: 部分遠端工作             # optional, like employment_type and posted
 read: 2026-11-08             # filled in
-read_with: fetch             # fetch | browser | pasted
+read_with: fetch             # fetch | browser | pasted | file
 must_haves:
   - text: 熟悉 Python 開發
     tags: [skill/python]
@@ -154,6 +154,19 @@ duties:
 Every requirement has at least one Tag or one proposed term. Requirements keep the posting's wording and language.
 
 ## Workflows
+
+### Sort what the user gives
+
+The user may give anything, in any form: links, PDF, Word or HTML files, photos and screenshots, or a block of copied text. First decide what it is:
+
+| It is | Such as | Workflow |
+|---|---|---|
+| About a Candidate | A resume, notes, work logs, certificates, achievement records, a GitHub link | Import a Source, for the Candidate it is about; ask when that is unclear |
+| One Job | A posting's link, its PDF or HTML, a screenshot, its copied text | Read Jobs, from step 2 |
+| Many Jobs | A copied search result page, a listing link, a file with several postings | Read Jobs, from step 1 |
+| Several of these | An email with a posting and notes about the Candidate | Split it and handle each part |
+
+Read files with `extract-text` (Word, HTML, text, and PDF when `pdftotext` is installed) or with your own file reading (PDF, photos and screenshots, only if you can see images). Say what you could not read; never guess it.
 
 ### Create a Candidate
 
@@ -209,9 +222,9 @@ When new input contradicts a Fact, write the new Fact, set both to `state: confl
 - For a one-sentence request, turn it into these filters. For example, "Candidates with Python and finance background and 5+ years of experience" is `search candidates --tag python --industry finance --min-years 5`.
 - For anything the filters cannot express, use `query` on the Index tables: `candidates`, `sources`, `facts`, `fact_tags`, `fact_sources`, `tags`, `tag_terms`, `questions`, and the view `candidate_tags` (Tags on active, sourced Facts).
 
-### Read job sites
+### Read Jobs
 
-How each site is read:
+Jobs come from links, from files and from copied text. For links, each site is read this way:
 
 | Site | Method |
 |---|---|
@@ -227,10 +240,14 @@ The script names itself in its User-Agent and follows robots.txt. When a site re
    - Yourator and careers pages: `job listing <url>` lists each Job's title, company, location, salary where the page shows them, and link.
    - 104 and CakeResume: ask the user to open the search results in their own browser, scroll until every Job has loaded (104 keeps loading more as you scroll; CakeResume may need its next-page button), select all, copy, and paste the text here. List each Job's title, company, location and salary from it. The copied text has no links, so ask the user for the links of the Jobs worth reading, or open them by title in a browser you can use.
    - LinkedIn: the user pastes the results, or you read the page they have open in their signed-in browser.
+   - A file or text with many Jobs: list them from it the same way. When it already holds each Job's full posting, go straight to step 3 for the ones that pass.
 
    Screen by title and company against what the user is looking for; skip Jobs marked `*` (already saved) unless the user wants a new reading.
-2. **Job**: `job fetch <url>` for each Job that passes. For 104, CakeResume and LinkedIn, get the page text from a browser you can use or ask the user to copy it, save it to a temporary file outside any repository, and run `job fetch <url> --text <file>` for the Job id and whether a snapshot exists.
-3. **Snapshot**: write must-haves, nice-to-haves and duties from the posting, in its wording. Tag each requirement with `taxonomy find`; a term with no Tag goes under `proposed`. Pipe the snapshot as JSON to `job save`, with `text` set to the posting text and `read_with` set to `browser` or `pasted` when the script did not fetch it.
+2. **Job**:
+   - A link the script may fetch: `job fetch <url>`.
+   - A file, or text copied from a browser or pasted by the user: save pasted text to a temporary file outside any repository, then `job fetch [<url>] --file <file>`. HTML files also give the posting's structured data. Add the link when there is one, for the Job id and whether a snapshot exists; without one, `job save` makes the id from company and title.
+   - A photo or screenshot: read it if you can see images, save the text to a file, and use `--file`.
+3. **Snapshot**: write must-haves, nice-to-haves and duties from the posting, in its wording. Tag each requirement with `taxonomy find`; a term with no Tag goes under `proposed`. Pipe the snapshot as JSON to `job save`, with `text` set to the posting text, `url` when there is one, and `read_with` set to `browser`, `pasted` or `file` when the script did not fetch it.
 4. **Report** the saved Jobs and every proposed term. When the user accepts a term, add the Tag to `taxonomy.yml` and run `job accept <term> <tag>`.
 
 ## Rules
