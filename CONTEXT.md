@@ -96,12 +96,26 @@ Where an Application is: found, evaluated, preparing, applied, interview
 _Avoid_: status (reserved for issue labels)
 
 **Evaluation**:
-The assessment of one Application: fit score, reasons for the recommendation,
-gaps and risks, and a Success rating.
+The assessment of one Application, made for one of the Candidate's Roles, or
+against all of the Candidate's Facts when no Role fits: Fit score, reasons tied
+to Facts and Job requirements, gaps and risks, and a Success rating.
 _Avoid_: review, analysis
 
+**Fit score**:
+An Evaluation's score from 0 to 100: the weighted sum of skill overlap,
+seniority, industry and domain, achievement evidence, and salary, location and
+work mode.
+_Avoid_: match score, fit percentage
+
+**Hard requirement**:
+A must-have that gates a Job instead of adding to the Fit score: a degree,
+minimum years, or a required certificate or language. Failing one lowers the
+Success rating by one level.
+_Avoid_: knockout, deal-breaker
+
 **Success rating**:
-High, medium, or low, with reasons. A rule-based estimate, never a probability.
+High, medium, or low, with reasons, from the Fit score and the Hard
+requirements. A rule-based estimate, never a probability.
 _Avoid_: success probability, chance, odds
 
 **Tailored resume**:

@@ -1,6 +1,6 @@
 ---
 name: headhunter
-description: AI headhunter for the user's own job search or for many candidates at once. Use when the user wants to add, update, search or archive candidates in their candidate database; import any material about a candidate (notes, work logs, photos, resumes, GitHub repos) and have it checked, tagged and followed up with questions; read a job listing URL (104, CakeResume, Yourator, LinkedIn, company careers pages) and evaluate jobs against candidates; estimate fit and success odds; write a tailored Chinese and English resume for a job; or track application progress, interview feedback and what to fix next.
+description: AI headhunter for the user's own job search or for many candidates at once. Use when the user wants to add, update, search or archive candidates in their candidate database; import any material about a candidate (notes, work logs, photos, resumes, GitHub repos) and have it checked, tagged and followed up with questions; read a job listing URL (104, CakeResume, Yourator, LinkedIn, company careers pages) and evaluate jobs against candidates and their target roles with a fit score and a success rating; write a tailored Chinese and English resume for a job; or track application progress, interview feedback and what to fix next.
 ---
 
 # headhunter
@@ -45,7 +45,11 @@ python3 <skill folder>/scripts/hh.py <command>
 | `role match <id> <role>` | List the Facts that share a Tag with each requirement, strongest evidence first |
 | `role build <id> <role>` | Write the Role profile from JSON or YAML on stdin; gap kinds are worked out, and nothing is written if any check fails |
 | `role list [<id>]` / `role stale [<id>]` | List Roles and whether their profiles are current; list out-of-date profiles with reasons |
-| `validate [<id>]` | Check `taxonomy.yml`, Candidate folders and Job snapshots |
+| `role refine <id> <role> [--accept <tag or requirement> ...]` | Propose requirements that recur across the Jobs evaluated under a Role; apply the accepted ones |
+| `evaluation match <job> [<id>] [--all]` | List the Candidates and Roles that share Tags with a Job; with a Candidate, list their Facts per Job requirement |
+| `evaluation save <id> <job> [--replace]` | Write an Evaluation from JSON or YAML on stdin; the fit score, gap kinds and Success rating are worked out, and nothing is written if any check fails |
+| `evaluation list [<id>] [--job <job>] [--rating <rating>]` | List Evaluations with their Success ratings |
+| `validate [<id>]` | Check `taxonomy.yml`, Candidate folders (with their Roles and Evaluations) and Job snapshots |
 | `index` | Delete and rebuild `index.sqlite` |
 | `search candidates` / `search facts` | Filter the Index (see Search) |
 | `query "<SELECT ...>"` | Run a read-only SQL query on the Index |
@@ -71,7 +75,7 @@ Searches rebuild the Index first when any file changed. Run `validate` after edi
       profile.md                   Role profile: positioning, evidence, gaps
     applications/<job-id>/
       status.yml                   stage, timeline, next step, due date
-      evaluation.md                fit, reasons, gaps, success rating
+      evaluation.md                Evaluation: Role, fit score, reasons, gaps and risks, Success rating
       feedback.md                  feedback log and fixes
       resume.zh.md  resume.zh.pdf
       resume.en.md  resume.en.pdf
@@ -81,6 +85,8 @@ Searches rebuild the Index first when any file changed. Run `validate` after edi
 ```
 
 Ids are zero-padded and assigned by the script: `c-001`, `s-001`, `f-001`, `q-001`. `<slug>` is the Candidate's name as given, lowercased, with spaces turned into hyphens and punctuation removed; Chinese characters stay as they are. `<role-slug>` comes from the Role's title the same way, and requirements are numbered `r-001` within their Role.
+
+Within a Job, requirements are referred to by position, `must-1`, `nice-1`, and duties as `duty-1`.
 
 A Job id comes from its URL: `j-104-<job code>`, `j-cakeresume-<company>-<job slug>`, `j-yourator-<number>`, `j-linkedin-<number>`. A page on any other site uses its host name and a hash of its URL, such as `j-jobs-lever-co-91b1946a`. A Job the user gave without a link uses a hash of its company and title, such as `j-user-3f9a1c2e`.
 
@@ -193,6 +199,45 @@ requirements:
 
 A profile is stale when `role.yml` changed since it was built, a Fact it cites changed or was removed, or a newer active Fact shares a Tag with its requirements.
 
+**evaluation.md**: a YAML block between `---` lines, then the Evaluation in readable form, written by `evaluation save` from what you give it:
+
+```yaml
+role: senior-backend-engineer    # the Role it was made for; left out when no Role fits
+job_level: senior                # the level the Job asks for; same values as seniority
+industries: [industry/software]  # the Job's industry Tags
+domains: [domain/ai]             # the Job's domain Tags; at least one industry or domain
+hard:                            # must-haves that are hard requirements: degree | years | certificate | language
+  - {requirement: must-1, kind: years, min_years: 2}
+  - {requirement: must-4, kind: degree, met: false, facts: [f-014], why: B.S. only; the Job asks for a master's}
+evidence:                        # as in profile.md: active, sourced Facts per requirement, each with why
+  - requirement: must-2
+    facts: [{id: f-007, why: Built inventory services in Python}]
+gaps:                            # as in profile.md: each requirement without documented or third-party evidence
+  - {requirement: must-3, facts: [], close: Ask whether they have used FastAPI}
+achievements:                    # achievement or project Facts with a result, matched to duties
+  - {fact: f-003, target: duty-5, why: Cut order API latency with caching}
+conditions:                      # fit: match | partial | mismatch | unknown
+  salary: {fit: unknown, why: The posting gives no range}
+  location: {fit: match, why: Both in Taipei}
+  work_mode: {fit: mismatch, why: On-site; the Candidate wants hybrid}
+risks:
+  - {risk: The duties center on model serving, close: Ask about model deployment before applying}
+summary: The recommendation in a few sentences.
+```
+
+The script adds `candidate`, `job`, `evaluated`, `candidate_level` (from `profile.yml`), the gap kinds, the result of each hard requirement (met, failed or unknown), `gate` (passed, unconfirmed or failed), the score of each dimension, `score`, `rating` and `reasons`:
+
+| Dimension | Weight | How it is scored |
+|---|---|---|
+| Hard requirements | Gate | `years`: met when the periods of the cited experience Facts add up to `min_years`, failed when they do not. Other kinds: met with evidence, failed with `met: false`. With no sourced Fact, a hard requirement is unconfirmed: a gap to close before applying, not a failure |
+| Skill overlap | 35% | Share of the other requirements with sourced evidence; must-haves count twice. Self-reported evidence counts and stays a `weak-evidence` gap; requirements that only inferred Facts support count as gaps to confirm |
+| Seniority | 20% | Steps between `job_level` and the Candidate's `seniority`: same 100, one 60, two 30, more 0, reported as under- or over-qualified |
+| Industry and domain | 20% | 100 when an active, sourced Fact has one of the Job's industry Tags, 60 when it shares only a domain Tag, otherwise 0 |
+| Achievement evidence | 15% | Duties matched by an achievement or project Fact with a result, out of three, or out of all duties when there are fewer; requirements stand in when the Job lists no duties |
+| Salary, location, work mode | 10% | Average of the three fits: match 100, partial 50, unknown 50, mismatch 0 |
+
+The fit score is the weighted sum, rounded. It maps to a Success rating: 75 and above high, 55 to 74 medium, below 55 low. Failing any hard requirement lowers the rating by one level; low stays low. The reasons name the band, each failed or unconfirmed hard requirement, the must-haves missing or unconfirmed, and the strongest and weakest dimensions.
+
 ## Workflows
 
 ### Sort what the user gives
@@ -265,8 +310,21 @@ A Candidate can pursue several Roles at once. Roles never change Facts, Sources 
    - `positioning`: a headline and short summary for this Role, using only what the listed Facts say.
    - `evidence`: for each requirement, the active, sourced Facts that support it, each with why.
    - `gaps`: for each requirement without documented or third-party evidence, how to close it; list inferred Facts under its gap to confirm. The script works out the gap kind and refuses a profile that leaves any requirement unaccounted for.
-4. **Keep current**: after imports or conflict decisions, `role stale` names the profiles to rebuild and why. Rebuilding never changes `role.yml`; change requirements only with the user, through `role update`.
+4. **Keep current**: after imports or conflict decisions, `role stale` names the profiles to rebuild and why. Rebuilding never changes `role.yml`; change requirements only with the user, through `role update` or `role refine` (see Evaluate Jobs).
 5. **Strategy**: priorities and states live in `role.yml` and appear in the Roles section of `strategy.md`. Drop a Role with `role update <id> <role>` and `{"state": "dropped"}`; its folder stays.
+
+### Evaluate Jobs
+
+Each Evaluation compares one Job snapshot with one Candidate under the Role that fits the Job, and starts the Candidate's Application for that Job in `applications/<job-id>/`. Evaluations cite Facts and never change them. They need the Candidate's `seniority` in `profile.yml`; ask the user when it is missing.
+
+1. **Find**: `evaluation match <job>` lists the active Candidates whose active Roles share Tags with the Job's requirements, best first, with each Role's profile state and how many of the Job's Tags the Candidate's Facts cover. `--all` also lists Candidates with no Role sharing a Tag. To evaluate one Candidate, pass their id.
+2. **Choose the Role** that fits the Job by its title, level and requirements, not by Tag counts alone. When no Role fits, evaluate against all of the Candidate's Facts and leave `role` out. When the Role's profile is stale, offer to rebuild it first.
+3. **Match**: `evaluation match <job> <id>` lists the Facts that share a Tag with each requirement, the Job's and the Candidate's salary, location and work mode, and the achievement targets. Start from the Role profile's evidence, judge each requirement against the posting's wording, and look for other Facts that support it.
+4. **Hard requirements**: mark only must-haves the posting states as required: a degree, minimum years, a certificate or a language. For `years`, cite the experience Facts that count toward it. Use `met: false` only when Facts show the requirement is not met. Every other requirement counts toward skill overlap.
+5. **Save**: pipe the Evaluation to `evaluation save <id> <job>`. When Facts change, evaluate again with `--replace`.
+6. **Report** the Success rating with its reasons, the gaps with how to close them, and the risks. Ask the questions the gaps need and save the answers as in Follow-up questions.
+7. **No fitting Role**: offer to create a Role from the Job: its title (add it to `glossary.yml`), requirements from its must-haves and nice-to-haves with their Tags, `origin: job` and the Job id. Run `role new` only when the user agrees.
+8. **Refine Roles**: when `evaluation save` reports proposed changes, run `role refine <id> <role>`. It proposes Tags that two or more Jobs evaluated under the Role require and no requirement has (a must-have when at least half of those Jobs list it as one), and assumed or Job requirements those Jobs also ask for. Show them to the user, apply the accepted ones with `--accept`, then rebuild the Role profile.
 
 ### Search
 
@@ -274,7 +332,7 @@ A Candidate can pursue several Roles at once. Roles never change Facts, Sources 
 - `search candidates` also takes `--role` (an active Role whose title, in either language, or folder name contains the text), `--requirement-tag` and `--no-must-gaps` (the Role's profile is built and no must-have is `missing` or `to-confirm`). Together they apply to the same Role: "Candidates targeting data engineer with no must-have gaps" is `search candidates --role "data engineer" --no-must-gaps`.
 - `search facts` with `--candidate`, `--tag`, `--kind`, `--evidence`, `--origin`, `--state`, `--since <year>` and `--text`.
 - For a one-sentence request, turn it into these filters. For example, "Candidates with Python and finance background and 5+ years of experience" is `search candidates --tag python --industry finance --min-years 5`.
-- For anything the filters cannot express, use `query` on the Index tables: `candidates`, `sources`, `facts`, `fact_tags`, `fact_sources`, `tags`, `tag_terms`, `questions`, `roles`, `role_requirements`, `role_requirement_tags`, `role_evidence`, `role_gaps`, and the view `candidate_tags` (Tags on active, sourced Facts).
+- For anything the filters cannot express, use `query` on the Index tables: `candidates`, `sources`, `facts`, `fact_tags`, `fact_sources`, `tags`, `tag_terms`, `questions`, `roles`, `role_requirements`, `role_requirement_tags`, `role_evidence`, `role_gaps`, `evaluations`, `evaluation_gaps`, and the view `candidate_tags` (Tags on active, sourced Facts).
 
 ### Read Jobs
 
@@ -311,7 +369,7 @@ The script names itself in its User-Agent and follows robots.txt. When a site re
 3. **Supplement only by asking.** Add information only through follow-up questions and inferences the user confirms. Never search the web or another service for information about a Candidate.
 4. **Show conflicts, don't overwrite.** When new input contradicts an existing Fact, list both and ask the user which is right.
 5. **Tags come from the Taxonomy.** Propose new Tags; add them only when the user accepts.
-6. **Role profiles cite Facts, never change them.** Reference Facts by id; inferred Facts count only as gaps to confirm.
+6. **Role profiles and Evaluations cite Facts, never change them.** Reference Facts by id; inferred Facts count only as gaps to confirm.
 7. **Archive, don't delete.** Deleting a candidate moves their folder to `archive/`.
 8. **Success ratings are estimates.** Present them as high / medium / low with reasons, never as a real probability.
 9. **LinkedIn by hand only.** Read LinkedIn only from pages the user has open in their signed-in browser or text they paste. Never scrape it in bulk. If any site shows a CAPTCHA or sign-in wall, ask the user to handle it or paste the content.
