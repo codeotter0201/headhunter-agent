@@ -56,10 +56,15 @@ python3 <skill folder>/scripts/hh.py <command>
 | `application overdue` | List open Applications past their due date, across all Candidates |
 | `application progress [--by candidate\|role\|job\|company]` | Count Applications per Stage, with overdue follow-ups and outcomes |
 | `application sync` | Create `status.yml` for evaluated Applications that have none |
+| `feedback add <id> <job>` / `feedback update <id> <job> <entry>` | Add Feedback to an Application, or merge fields into one piece, from JSON or YAML on stdin; ids are filled in, and nothing is written if any check fails |
+| `feedback list [<id>] [--job] [--role] [--company] [--cause] [--state] [--from]` | List Feedback and its Fix directions |
+| `feedback patterns [<id>]` | Find causes that recur across a Candidate's Applications and what they suggest changing |
+| `feedback companies` | Rewrite the Feedback section of every Company notes file |
+| `feedback calibrate` | Compare Success ratings with closed outcomes and report where the rubric over- or under-estimates |
 | `resume plan <id> <job>` | Show what an Application's resumes start from: the Role profile, the Evaluation's evidence, what to leave out, the usable Facts and the Glossary |
 | `resume save <id> <job> [--replace]` | Write `resume.zh.md` and `resume.en.md` from JSON or YAML on stdin and print both to PDF; nothing is written if any check fails |
 | `resume pdf <id> <job>` | Check both resumes and print them to PDF again, after editing them by hand |
-| `validate [<id>]` | Check `taxonomy.yml`, Candidate folders (with their Roles, Evaluations, resumes and Applications) and Job snapshots |
+| `validate [<id>]` | Check `taxonomy.yml`, Candidate folders (with their Roles, Evaluations, resumes, Applications and Feedback) and Job snapshots |
 | `index` | Delete and rebuild `index.sqlite` |
 | `search candidates` / `search facts` | Filter the Index (see Search) |
 | `query "<SELECT ...>"` | Run a read-only SQL query on the Index |
@@ -86,11 +91,11 @@ Searches rebuild the Index first when any file changed. Run `validate` after edi
     applications/<job-id>/
       status.yml                   Application: Role, Stage, next step, due date, dated timeline
       evaluation.md                Evaluation: Role, fit score, reasons, gaps and risks, Success rating
-      feedback.md                  feedback log and fixes
+      feedback.md                  Feedback and its Fix directions
       resume.zh.md  resume.zh.pdf  Tailored resume in Chinese: Markdown citing Facts, and its PDF
       resume.en.md  resume.en.pdf  the same in English
   jobs/<job-id>.md                 Job snapshot: requirements with Tags, duties, salary, location, posting text
-  companies/<company-slug>.md      company notes built from feedback
+  companies/<company-slug>.md      Company notes; the Feedback section is kept by the script
   archive/                         archived candidates
 ```
 
@@ -297,6 +302,24 @@ timeline:                       # one entry per Stage change, oldest first
 
 A closed Application has `outcome` (hired, declined, rejected or withdrawn) on the Application and its last timeline entry, and no `next_step` or `due`. `role` matches the Application's Evaluation.
 
+**feedback.md**: a YAML block between `---` lines with `job` and `entries`, then the Feedback in readable form, written by the script.
+
+```yaml
+- id: fb-001                     # filled in; numbered within the Application
+  date: 2026-11-12               # when it was received; today when left out
+  from: interviewer              # hr | interviewer | candidate | user
+  content: The system design answer stayed shallow on capacity estimates
+  cause: skill-gap               # skill-gap | experience | communication | salary | culture-fit | resume-presentation
+  tags: [skill/system-design]    # optional: what it is about, from taxonomy.yml
+  fix: Practice two system design questions a week   # the Fix direction: one concrete action
+  state: open                    # open | in-progress | done
+  material: Order system design document   # optional: what the Fix direction will produce
+  sources: [s-008]               # with material: the Source it was imported as, required when done
+  company_note: The second round is a system design interview   # optional: what this says about the company
+```
+
+**Company notes** (`companies/<company-slug>.md`): `<company-slug>` comes from the company name in the Job snapshot, the same way as Candidate slugs. The script keeps the `## Feedback` section: every `company_note` for that company across all Candidates, newest first, each with the Candidate and Job ids and no names. Anything else in the file is left alone.
+
 ## Workflows
 
 ### Sort what the user gives
@@ -416,13 +439,21 @@ An Application is one Candidate × Job pair. When you start working with the use
 - `application overdue` lists every open Application whose due date has passed, across all Candidates. `application progress --by candidate`, `role`, `job` or `company` counts them per Stage; Roles are counted per Candidate, and companies by the name in the Job snapshot.
 - When `validate` reports an evaluated Application with no `status.yml`, run `application sync`; it starts each one at evaluated, on the date of its Evaluation.
 
+### Log Feedback
+
+1. **Log**: when the user reports how an Application went, pipe each piece to `feedback add <id> <job>`, one cause and one Fix direction per piece. Quote or summarize it, and let the user confirm the cause. Set `from` to who said it, and `from: user` for the user's own judgment. Add `tags` when it names a skill or topic, so repeats can be found. An Application must exist first.
+2. **Company notes**: when the Feedback says something about the company rather than the Candidate, such as its interview format or what it screens for, add a `company_note`: one sentence, in general terms, naming no one. The script adds it to the company's notes.
+3. **Follow through**: `candidate show` lists open Fix directions. Change their state with `feedback update <id> <job> <entry>` and `{"state": "in-progress"}`. When a Fix direction will produce new material, such as a portfolio piece, set `material`. It can only be done once the material is imported: run Import a Source, then update with `{"state": "done", "sources": ["s-008"]}`. New Facts mark the affected Role profiles stale, so offer to rebuild them.
+4. **Patterns**: when `feedback add` reports a recurring cause, or the user asks what keeps going wrong, run `feedback patterns [<id>]`. It finds causes in two or more of a Candidate's Applications with a Fix direction still to finish, the topics they share, and the Roles with the cause in two or more Applications. It suggests what each cause means for the Strategy, those Role profiles and open Applications' resumes. Turn that into specific proposals, and make only the changes the user accepts: edit `strategy.md`, `role build`, or `resume save --replace`.
+5. **Calibrate**: `feedback calibrate` compares each closed Application's Success rating with how it ended. Hired, or declined after an offer, counts as an offer; rejected as a rejection; withdrawn, and declined without an offer, are left out. It reports offer rates per rating, Applications rated high and rejected or rated low with an offer, which dimensions failed to separate offers from rejections, and rubric changes to consider. Show the user the proposals and how few outcomes they rest on. The script never changes the rubric.
+
 ### Search
 
 - `search candidates` with `--tag` (Tag id, label or alias; repeat for AND), `--industry`, `--seniority`, `--status`, `--min-years` and `--text`. It counts only active, sourced Facts and shows which Facts matched each Tag.
 - `search candidates` also takes `--role` (an active Role whose title, in either language, or folder name contains the text), `--requirement-tag` and `--no-must-gaps` (the Role's profile is built and no must-have is `missing` or `to-confirm`). Together they apply to the same Role: "Candidates targeting data engineer with no must-have gaps" is `search candidates --role "data engineer" --no-must-gaps`.
 - `search facts` with `--candidate`, `--tag`, `--kind`, `--evidence`, `--origin`, `--state`, `--since <year>` and `--text`.
 - For a one-sentence request, turn it into these filters. For example, "Candidates with Python and finance background and 5+ years of experience" is `search candidates --tag python --industry finance --min-years 5`.
-- For anything the filters cannot express, use `query` on the Index tables: `candidates`, `sources`, `facts`, `fact_tags`, `fact_sources`, `tags`, `tag_terms`, `questions`, `roles`, `role_requirements`, `role_requirement_tags`, `role_evidence`, `role_gaps`, `evaluations`, `evaluation_gaps`, `applications`, `application_timeline`, and the view `candidate_tags` (Tags on active, sourced Facts).
+- For anything the filters cannot express, use `query` on the Index tables: `candidates`, `sources`, `facts`, `fact_tags`, `fact_sources`, `tags`, `tag_terms`, `questions`, `roles`, `role_requirements`, `role_requirement_tags`, `role_evidence`, `role_gaps`, `evaluations`, `evaluation_gaps`, `applications`, `application_timeline`, `feedback`, `feedback_tags`, and the view `candidate_tags` (Tags on active, sourced Facts).
 
 ### Read Jobs
 
@@ -465,3 +496,4 @@ The script names itself in its User-Agent and follows robots.txt. When a site re
 9. **LinkedIn by hand only.** Read LinkedIn only from pages the user has open in their signed-in browser or text they paste. Never scrape it in bulk. If any site shows a CAPTCHA or sign-in wall, ask the user to handle it or paste the content.
 10. **Read job sites politely.** Follow robots.txt, identify the script honestly, and never work around a refusal or bot check.
 11. **Two resumes per job.** Write a Chinese and an English version; use `glossary.yml` so names are translated the same way every time.
+12. **Feedback proposes, the user decides.** Changes to a Strategy, Role profile, resume or the rubric that come from Feedback wait for the user's agreement.

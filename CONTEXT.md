@@ -128,11 +128,13 @@ _Avoid_: CV variant, generated resume
 
 **Feedback**:
 One piece of input about how an Application went, from HR, an interviewer, the
-Candidate, or the user, with its cause.
+Candidate, or the user, with its cause: skill gap, experience, communication,
+salary, culture fit, or resume presentation.
 _Avoid_: comment, note
 
 **Fix direction**:
-A concrete action that responds to Feedback, with its own completion state.
+A concrete action that responds to Feedback, with its own completion state. One
+that produces new material ends with importing it as a Source.
 _Avoid_: suggestion, todo
 
 **Company notes**:

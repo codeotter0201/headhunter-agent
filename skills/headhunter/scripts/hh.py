@@ -88,7 +88,31 @@ RUBRIC = (  # dimension, weight in percent, label
 )
 RATINGS = ("high", "medium", "low")
 RATING_FLOORS = (75, 55, 0)  # lowest fit score for each rating
-INDEX_VERSION = 2  # raise when SCHEMA changes, so existing indexes are rebuilt
+INDEX_VERSION = 3  # raise when SCHEMA changes, so existing indexes are rebuilt
+FEEDBACK_FROM = ("hr", "interviewer", "candidate", "user")
+FEEDBACK_CAUSES = ("skill-gap", "experience", "communication", "salary", "culture-fit", "resume-presentation")
+FEEDBACK_STATES = ("open", "in-progress", "done")
+FEEDBACK_ORDER = ("id", "date", "from", "content", "cause", "tags", "fix", "state", "material", "sources", "company_note")
+FEEDBACK_PROPOSALS = {  # what a recurring cause suggests changing in the Strategy, Role profiles and resumes
+    "skill-gap": ("add the skill to what to strengthen, with the Fix directions as the plan",
+                  "record it as a gap, with how to close it",
+                  "lead with the closest Facts; never claim the skill"),
+    "experience": ("reconsider the target level or which Roles come first",
+                   "move the positioning toward the experience the Facts show",
+                   "put the most relevant experience first"),
+    "communication": ("plan interview practice for it",
+                      "add Facts that show it to the positioning, if there are any",
+                      "state scope and results more plainly"),
+    "salary": ("revisit the expected salary or the kinds of company to target",
+               "check that the Role's level matches the salary wanted",
+               "no change; salary does not belong in a resume"),
+    "culture-fit": ("narrow the kinds of company and team to target",
+                    "adjust the positioning to the working style that suits the Candidate",
+                    "emphasize Facts that show how the Candidate works"),
+    "resume-presentation": ("no change unless the Roles themselves need it",
+                            "rewrite the positioning the resumes start from",
+                            "change the emphasis and order, then write the resumes again"),
+}
 STAGES = ("found", "evaluated", "preparing", "applied", "interview", "offer", "closed")
 OUTCOMES = ("hired", "declined", "rejected", "withdrawn")
 STATUS_ORDER = ("job", "role", "stage", "round", "outcome", "next_step", "due", "timeline")
@@ -639,6 +663,15 @@ def validate_candidate(folder: Path, known_tags: set) -> list:
             err(str(exc))
             continue
         errors.extend(f"{name}: {e}" for e in check_status(status, jid, folder))
+        if (path / "feedback.md").exists():
+            try:
+                front, _ = read_job(path / "feedback.md")
+            except HHError as exc:
+                err(str(exc))
+                continue
+            if front.get("job") != jid:
+                err(f"feedback {jid}: job must be {jid}, its folder name")
+            errors.extend(f"{name}: {e}" for e in check_feedback(front.get("entries"), jid, sources, known_tags))
     return errors
 
 
@@ -669,6 +702,9 @@ CREATE TABLE evaluation_gaps (candidate_id TEXT, job_id TEXT, requirement TEXT, 
 CREATE TABLE applications (candidate_id TEXT, job_id TEXT, role TEXT, company TEXT, title TEXT, stage TEXT,
   round INTEGER, outcome TEXT, next_step TEXT, due TEXT, PRIMARY KEY (candidate_id, job_id));
 CREATE TABLE application_timeline (candidate_id TEXT, job_id TEXT, stage TEXT, round INTEGER, date TEXT, note TEXT);
+CREATE TABLE feedback (candidate_id TEXT, job_id TEXT, id TEXT, date TEXT, source TEXT, content TEXT, cause TEXT, fix TEXT,
+  state TEXT, material TEXT, company_note TEXT, PRIMARY KEY (candidate_id, job_id, id));
+CREATE TABLE feedback_tags (candidate_id TEXT, job_id TEXT, feedback_id TEXT, tag TEXT);
 CREATE VIEW candidate_tags AS
   SELECT DISTINCT f.candidate_id, t.tag FROM facts f
   JOIN fact_tags t ON t.candidate_id = f.candidate_id AND t.fact_id = f.id
@@ -761,6 +797,15 @@ def rebuild_index(root: Path) -> dict:
                             [(cid, jid, e.get("stage"), e.get("round"), str(e.get("date")), e.get("note"))
                              for e in status.get("timeline") or []])
             counts["applications"] += 1
+            for entry in load_feedback(folder, jid):
+                con.execute("INSERT INTO feedback VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
+                    cid, jid, entry.get("id"), str(entry.get("date")), entry.get("from"), entry.get("content"),
+                    entry.get("cause"), entry.get("fix"), entry.get("state"), entry.get("material"),
+                    entry.get("company_note"),
+                ))
+                con.executemany("INSERT INTO feedback_tags VALUES (?, ?, ?, ?)",
+                                [(cid, jid, entry.get("id"), t) for t in entry.get("tags") or []])
+                counts["feedback"] += 1
         counts["candidates"] += 1
         counts["facts"] += len(facts)
     con.execute(f"PRAGMA user_version = {INDEX_VERSION}")
@@ -783,7 +828,7 @@ def index_stale(root: Path) -> bool:
         for _, path in role_dirs(folder):
             paths += [path, path / "role.yml", path / "profile.md"]
         for _, path in application_dirs(folder):
-            paths += [path, path / "evaluation.md", path / "status.yml"]
+            paths += [path, path / "evaluation.md", path / "status.yml", path / "feedback.md"]
     if any(p.exists() and p.stat().st_mtime > built for p in paths):
         return True
     con = sqlite3.connect(index.as_uri() + "?mode=ro", uri=True)
@@ -1222,6 +1267,14 @@ def role_stale(path: Path, role: dict, facts: list) -> list:
     return reasons
 
 
+def replace_section(text: str, heading: str, section: str) -> str:
+    """Replace the '## heading' section of a Markdown text, or add it at the end."""
+    match = re.search(rf"(?ms)^## {re.escape(heading)}\n.*?(?=^## |\Z)", text)
+    if not match:
+        return text.rstrip() + "\n\n" + section
+    return text[:match.start()] + section + ("\n" + text[match.end():] if text[match.end():] else "")
+
+
 def update_strategy_roles(folder: Path) -> None:
     """Rewrite the Roles section of strategy.md from the role.yml files."""
     rows = []
@@ -1238,11 +1291,7 @@ def update_strategy_roles(folder: Path) -> None:
         lines.append("No Roles yet.")
     path = folder / "strategy.md"
     text = path.read_text(encoding="utf-8") if path.exists() else "# Strategy\n"
-    section = "\n".join(lines) + "\n"
-    match = re.search(r"(?ms)^## Roles\n.*?(?=^## |\Z)", text)
-    text = text[:match.start()] + section + ("\n" + text[match.end():] if text[match.end():] else "") if match \
-        else text.rstrip() + "\n\n" + section
-    path.write_text(text, encoding="utf-8")
+    path.write_text(replace_section(text, "Roles", "\n".join(lines) + "\n"), encoding="utf-8")
 
 
 # ---------------------------------------------------------------- evaluations
@@ -1774,6 +1823,130 @@ def stage_label(stage, number) -> str:
     return f"interview round {number}" if stage == "interview" else str(stage)
 
 
+# ---------------------------------------------------------------- feedback
+
+
+def load_feedback(folder: Path, jid: str) -> list:
+    path = folder / "applications" / jid / "feedback.md"
+    if not path.exists():
+        return []
+    entries = read_job(path)[0].get("entries")
+    return entries if isinstance(entries, list) else []
+
+
+def check_feedback(entries, jid: str, sources: list, known_tags: set) -> list:
+    if not isinstance(entries, list):
+        return [f"feedback {jid}: entries must be a list"]
+    errors, seen = [], set()
+    received = {s.get("id"): str(s.get("received")) for s in sources if isinstance(s, dict)}
+    for n, entry in enumerate(entries, 1):
+        if not isinstance(entry, dict):
+            errors.append(f"feedback {jid}: entry {n} is not a mapping")
+            continue
+        where = f"feedback {jid} {entry.get('id') or n}"
+        errors += [f"{where}: unknown field {key!r}" for key in entry if key not in FEEDBACK_ORDER]
+        if id_number(entry.get("id"), "fb") is None or entry.get("id") in seen:
+            errors.append(f"{where}: id must be unique and look like fb-001")
+        seen.add(entry.get("id"))
+        try:
+            if parse_date(entry.get("date"), f"{where}: date") > dt.date.today():
+                errors.append(f"{where}: date cannot be in the future")
+        except HHError as exc:
+            errors.append(str(exc))
+        if entry.get("from") not in FEEDBACK_FROM:
+            errors.append(f"{where}: from must be one of {', '.join(FEEDBACK_FROM)}")
+        if entry.get("cause") not in FEEDBACK_CAUSES:
+            errors.append(f"{where}: cause must be one of {', '.join(FEEDBACK_CAUSES)}")
+        if entry.get("state") not in FEEDBACK_STATES:
+            errors.append(f"{where}: state must be one of {', '.join(FEEDBACK_STATES)}")
+        for key, label in (("content", "the Feedback, quoted or summarized"), ("fix", "a concrete Fix direction")):
+            if not str(entry.get(key) or "").strip():
+                errors.append(f"{where}: {key} must be {label}")
+        tags = entry.get("tags") or []
+        if not isinstance(tags, list) or any(t not in known_tags for t in tags):
+            errors.append(f"{where}: tags must come from taxonomy.yml")
+        cited = entry.get("sources") or []
+        if not isinstance(cited, list):
+            errors.append(f"{where}: sources must be a list of Source ids")
+            cited = []
+        if cited and not entry.get("material"):
+            errors.append(f"{where}: only a Fix direction that produces material lists Sources")
+        if entry.get("material") and entry.get("state") == "done" and not cited:
+            errors.append(f"{where}: it produces {entry['material']!r}; import that as a Source and list it in sources")
+        for sid in cited:
+            if sid not in received:
+                errors.append(f"{where}: unknown Source {sid}")
+            elif received[sid] < str(entry.get("date")):
+                errors.append(f"{where}: {sid} was received before this Feedback, so it cannot be its material")
+    return errors
+
+
+def write_feedback(root: Path, folder: Path, jid: str, entries: list) -> None:
+    errors = check_feedback(entries, jid, read_list(folder / "sources.yml"), tag_ids(load_taxonomy(root)))
+    if errors:
+        raise HHError("nothing written:\n  " + "\n  ".join(errors))
+    job = read_job(root / "jobs" / f"{jid}.md")[0]
+    ordered = [{key: entry[key] for key in FEEDBACK_ORDER if key in entry} for entry in entries]
+    lines = [f"# Feedback: {job.get('title')} · {job.get('company')}", ""]
+    for entry in ordered:
+        lines += [f"## {entry['id']} · {entry['date']} · {entry['from']} · {entry['cause'].replace('-', ' ')}", "",
+                  str(entry["content"]), "", f"Fix direction ({entry['state']}): {entry['fix']}"]
+        if entry.get("material"):
+            lines.append(f"Material: {entry['material']}" + (f" ({', '.join(entry['sources'])})" if entry.get("sources") else ""))
+        lines.append("")
+    path = folder / "applications" / jid / "feedback.md"
+    path.write_text(f"---\n{hhyaml.dumps({'job': jid, 'entries': ordered})}---\n\n" + "\n".join(lines).rstrip() + "\n",
+                    encoding="utf-8")
+
+
+def update_company_notes(root: Path) -> int:
+    """Rewrite the Feedback section of every Company notes file from the Candidates' Feedback; returns how many."""
+    notes = {}
+    for cid, folder in candidate_dirs(root):
+        for jid, _ in application_dirs(folder):
+            job_path = root / "jobs" / f"{jid}.md"
+            if not job_path.exists():
+                continue
+            job = read_job(job_path)[0]
+            for entry in load_feedback(folder, jid):
+                if entry.get("company_note"):
+                    cause = str(entry.get("cause")).replace("-", " ")
+                    notes.setdefault(str(job.get("company")), []).append((
+                        str(entry.get("date")), f"- {entry.get('date')} · {job.get('title')} · {entry.get('from')} · "
+                        f"{cause}: {entry['company_note']} ({cid}, {jid}, {entry.get('id')})"))
+    base = root / "companies"
+    written = set()
+    for company, lines in notes.items():
+        path = base / f"{slugify(company)}.md"
+        text = path.read_text(encoding="utf-8") if path.exists() else f"# {company}\n\nCompany notes.\n"
+        section = "## Feedback\n\nKept in step with the Candidates' feedback.md by hh.py.\n\n" + "\n".join(
+            line for _, line in sorted(lines, reverse=True)) + "\n"
+        path.write_text(replace_section(text, "Feedback", section), encoding="utf-8")
+        written.add(path)
+    for path in base.glob("*.md"):
+        if path not in written:
+            section = "## Feedback\n\nNo Feedback about this company yet.\n"
+            path.write_text(replace_section(path.read_text(encoding="utf-8"), "Feedback", section), encoding="utf-8")
+    return len(written)
+
+
+def feedback_findings(con, only=None) -> list:
+    """Causes that recur across a Candidate's Applications and still have a Fix direction to finish."""
+    sql = ("SELECT f.candidate_id, c.name, c.folder, f.cause, f.job_id, f.id, f.state, a.role FROM feedback f "
+           "JOIN candidates c ON c.id = f.candidate_id "
+           "JOIN applications a ON a.candidate_id = f.candidate_id AND a.job_id = f.job_id"
+           + (" WHERE f.candidate_id = ?" if only else "") + " ORDER BY f.candidate_id, f.cause, f.job_id, f.id")
+    grouped = {}
+    for cid, name, folder, cause, jid, fid, state, role in con.execute(sql, (only,) if only else ()):
+        finding = grouped.setdefault((cid, cause), {"cid": cid, "name": name, "folder": folder, "cause": cause,
+                                                    "jobs": {}, "roles": {}, "unfinished": 0})
+        finding["jobs"].setdefault(jid, []).append(fid)
+        finding["unfinished"] += state != "done"
+        if role:
+            finding["roles"].setdefault(role, set()).add(jid)
+    return [f for f in grouped.values() if len(f["jobs"]) >= 2 and f["unfinished"]]
+
+
 # ---------------------------------------------------------------- commands
 
 
@@ -1869,6 +2042,10 @@ def cmd_candidate_show(args):
               + (f"; resumes: {', '.join(written)}" if written else ""))
     statuses = [(jid, read_yaml(path / "status.yml", {})) for jid, path in application_dirs(folder)
                 if (path / "status.yml").exists()]
+    pending = [(jid, e) for jid, _ in application_dirs(folder) for e in load_feedback(folder, jid) if e.get("state") != "done"]
+    print(f"Open Fix directions: {len(pending)}")
+    for jid, entry in pending:
+        print(f"  {jid} {entry.get('id')} ({entry.get('state')}, {entry.get('cause')}): {entry.get('fix')}")
     print(f"Applications: {len(statuses)}")
     for jid, status in statuses:
         if status.get("stage") == "closed":
@@ -2100,7 +2277,8 @@ def cmd_index(args):
     root = data_dir()
     counts = rebuild_index(root)
     print(f"Rebuilt {root / 'index.sqlite'}: {counts['candidates']} Candidates, {counts['facts']} Facts, "
-          f"{counts['roles']} Roles, {counts['evaluations']} Evaluations, {counts['applications']} Applications.")
+          f"{counts['roles']} Roles, {counts['evaluations']} Evaluations, {counts['applications']} Applications, "
+          f"{counts['feedback']} pieces of Feedback.")
 
 
 def cmd_job_listing(args):
@@ -3338,6 +3516,186 @@ def cmd_application_sync(args):
           else "Every evaluated Application has a status.yml.")
 
 
+def cmd_feedback_add(args):
+    root = data_dir()
+    folder = find_candidate(root, args.id, archived=False)
+    load_status(folder, args.job)
+    payload = read_payload(args)
+    items = payload if isinstance(payload, list) else [payload]
+    entries = load_feedback(folder, args.job)
+    number = next_number([e.get("id") for e in entries], "fb")
+    new = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise HHError("each piece of Feedback must be a mapping")
+        if "id" in item:
+            raise HHError("leave id out; it is assigned")
+        new.append({"id": make_id("fb", number), "date": today(), "state": "open", **item})
+        number += 1
+    write_feedback(root, folder, args.job, entries + new)
+    update_company_notes(root)
+    for entry in new:
+        print(f"{entry['id']}  {entry['cause']}  {entry['fix']}")
+    found = feedback_findings(open_index(root), candidate_id(args.id))
+    if found:
+        print(f"Recurring across Applications: {', '.join(f['cause'] for f in found)}; run feedback patterns {args.id}")
+
+
+def cmd_feedback_update(args):
+    root = data_dir()
+    folder = find_candidate(root, args.id, archived=False)
+    load_status(folder, args.job)
+    patch = read_payload(args)
+    if not isinstance(patch, dict):
+        raise HHError("the update must be a mapping of fields")
+    if patch.get("id", args.entry) != args.entry:
+        raise HHError("a Feedback id cannot change")
+    entries = load_feedback(folder, args.job)
+    entry = next((e for e in entries if e.get("id") == args.entry), None)
+    if entry is None:
+        raise HHError(f"no Feedback {args.entry} on {args.job}")
+    for key, value in patch.items():
+        if value is None:
+            entry.pop(key, None)
+        else:
+            entry[key] = value
+    write_feedback(root, folder, args.job, entries)
+    update_company_notes(root)
+    print(f"{args.entry}  updated: {', '.join(patch)}; Fix direction {entry.get('state')}")
+
+
+def cmd_feedback_list(args):
+    root = data_dir()
+    con = open_index(root)
+    sql = ("SELECT f.candidate_id, c.name, f.job_id, f.id, f.date, f.source, f.cause, f.state, f.fix, f.material, a.company "
+           "FROM feedback f JOIN candidates c ON c.id = f.candidate_id "
+           "JOIN applications a ON a.candidate_id = f.candidate_id AND a.job_id = f.job_id WHERE 1 = 1")
+    params: list = []
+    filters = (("f.job_id = ?", args.job), ("a.role LIKE ?", f"%{args.role}%" if args.role else None),
+               ("a.company LIKE ?", f"%{args.company}%" if args.company else None), ("f.cause = ?", args.cause),
+               ("f.state = ?", args.state), ("f.source = ?", args.origin),
+               ("f.candidate_id = ?", candidate_id(args.id) if args.id else None))
+    for clause, value in filters:
+        if value:
+            sql += f" AND {clause}"
+            params.append(value)
+    rows = con.execute(sql + " ORDER BY f.candidate_id, f.date, f.job_id, f.id", params).fetchall()
+    for cid, name, jid, fid, date, origin, cause, state, fix, material, company in rows:
+        extra = f"; material: {material}" if material else ""
+        print(f"{cid} {name}  {jid} {fid}  {date}  {origin}  {cause}  [{state}] {fix}{extra}  · {company or '?'}")
+    print("No Feedback." if not rows else "1 piece of Feedback" if len(rows) == 1 else f"{len(rows)} pieces of Feedback")
+
+
+def cmd_feedback_patterns(args):
+    root = data_dir()
+    con = open_index(root)
+    only = candidate_id(args.id) if args.id else None
+    findings = feedback_findings(con, only)
+    if not findings:
+        print("No cause recurs across Applications with a Fix direction still to finish.")
+        return
+    for finding in findings:
+        cid, cause = finding["cid"], finding["cause"]
+        where = "; ".join(f"{jid} ({', '.join(ids)})" for jid, ids in finding["jobs"].items())
+        print(f"{cid} {finding['name']}: {cause} in {len(finding['jobs'])} Applications: {where}; "
+              f"Fix directions not done: {finding['unfinished']}")
+        topics = con.execute(
+            "SELECT t.tag, COUNT(DISTINCT t.job_id) n FROM feedback_tags t JOIN feedback f ON f.candidate_id = t.candidate_id "
+            "AND f.job_id = t.job_id AND f.id = t.feedback_id WHERE t.candidate_id = ? AND f.cause = ? GROUP BY t.tag "
+            "HAVING n >= 2 ORDER BY n DESC, t.tag", (cid, cause)).fetchall()
+        if topics:
+            print("  Same topic: " + ", ".join(f"{tag} in {n} Applications" for tag, n in topics))
+        roles = {role: jobs for role, jobs in finding["roles"].items() if len(jobs) >= 2}
+        for role, jobs in sorted(roles.items()):
+            print(f"  Under the Role {role}: {len(jobs)} Applications")
+        strategy, profile, resume = FEEDBACK_PROPOSALS[cause]
+        folder = root / "candidates" / finding["folder"]
+        print("  Propose to the user; change nothing until they accept:")
+        print(f"    Strategy (strategy.md): {strategy}")
+        for role in sorted(roles):
+            print(f"    Role profile {role} (role build): {profile}")
+        if not roles:
+            print("    Role profiles: no Role has this cause in 2 or more Applications")
+        open_resumes = [jid for jid, path in application_dirs(folder) if list(path.glob("resume.*.md"))
+                        and read_yaml(path / "status.yml", {}).get("stage") != "closed"]
+        listed = f" (open Applications with resumes: {', '.join(open_resumes)})" if open_resumes else ""
+        print(f"    Resumes: {resume}{listed}")
+
+
+def cmd_feedback_companies(args):
+    print(f"Wrote Company notes for {update_company_notes(data_dir())} companies.")
+
+
+def cmd_feedback_calibrate(args):
+    root = data_dir()
+    results = []
+    for cid, folder in candidate_dirs(root):
+        for jid, path in application_dirs(folder):
+            if not (path / "status.yml").exists() or not (path / "evaluation.md").exists():
+                continue
+            status = read_yaml(path / "status.yml", {})
+            if status.get("stage") != "closed":
+                continue
+            ev = read_job(path / "evaluation.md")[0]
+            offered = any(e.get("stage") == "offer" for e in status.get("timeline") or [])
+            outcome = status.get("outcome")
+            result = "offer" if outcome == "hired" or (outcome == "declined" and offered) else (
+                "rejected" if outcome == "rejected" else None)
+            causes = [str(e.get("cause")) for e in load_feedback(folder, jid)]
+            results.append({"cid": cid, "jid": jid, "rating": ev.get("rating"), "score": ev.get("score"), "gate": ev.get("gate"),
+                            "dimensions": ev.get("dimensions") or {}, "outcome": outcome, "result": result, "causes": causes})
+    counted = [r for r in results if r["result"]]
+    print(f"{len(results)} closed Applications with an Evaluation; {len(counted)} count "
+          "(hired or offer received, or rejected; withdrawn and declined without an offer say nothing about the rating)")
+    if not counted:
+        print("Nothing to compare yet.")
+        return
+    if len(counted) < 5:
+        print(f"Only {len(counted)} outcomes: read this as a hint, not a pattern.")
+    print("\n| Success rating | offer | rejected | offer rate |\n|---|---|---|---|")
+    rates = {}
+    for rating in RATINGS:
+        group = [r for r in counted if r["rating"] == rating]
+        offers = sum(r["result"] == "offer" for r in group)
+        rates[rating] = offers / len(group) if group else None
+        print(f"| {rating} | {offers} | {len(group) - offers} | " + (f"{offers * 100 // len(group)}%" if group else "-") + " |")
+    over = [r for r in counted if r["rating"] == "high" and r["result"] == "rejected"]
+    under = [r for r in counted if r["rating"] == "low" and r["result"] == "offer"]
+    print("\nOver-estimated (rated high, rejected):" + ("" if over else " none"))
+    for r in over:
+        print(f"  {r['cid']} {r['jid']}: score {r['score']}; Feedback causes: {', '.join(r['causes']) or 'none logged'}")
+    print("Under-estimated (rated low, offer received):" + ("" if under else " none"))
+    for r in under:
+        print(f"  {r['cid']} {r['jid']}: score {r['score']}; hard requirements {r['gate']}")
+    print("\nDimension averages (offer against rejected):")
+    offer_group = [r for r in counted if r["result"] == "offer"]
+    rejected_group = [r for r in counted if r["result"] == "rejected"]
+    proposals = []
+    if offer_group and rejected_group:
+        for key, weight, label in RUBRIC:
+            high = sum(r["dimensions"].get(key, 0) for r in offer_group) / len(offer_group)
+            low = sum(r["dimensions"].get(key, 0) for r in rejected_group) / len(rejected_group)
+            print(f"  {label} ({weight}%): {high:.0f} against {low:.0f}")
+            if high <= low:
+                proposals.append(f"{label} ({weight}%) did not separate offers from rejections: consider a lower weight")
+    else:
+        print("  needs both offers and rejections")
+    known = [rates[r] for r in RATINGS if rates[r] is not None]
+    if any(known[n + 1] > known[n] for n in range(len(known) - 1)):
+        proposals.append("A lower rating did better than a higher one: reconsider the score bands")
+    strict = [r for r in offer_group if r["gate"] == "failed"]
+    if strict:
+        proposals.append("An Application that failed a hard requirement still got an offer "
+                         f"({', '.join(r['jid'] for r in strict)}): reconsider what counts as hard")
+    if over:
+        missing = Counter(c for r in over for c in r["causes"] if c in ("communication", "culture-fit"))
+        if missing:
+            proposals.append(f"Over-estimated Applications cite {', '.join(missing)}, which the rubric does not score")
+    print("\nProposals for the user; this command changes nothing:" + ("" if proposals else " none"))
+    for proposal in proposals:
+        print(f"  - {proposal}")
+
+
 def matched_facts(con, cid: str, tag: str) -> list:
     rows = con.execute(
         "SELECT f.id FROM facts f JOIN fact_tags t ON t.candidate_id = f.candidate_id AND t.fact_id = f.id "
@@ -3648,6 +4006,34 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_application_progress)
     asub.add_parser("sync", help="create status.yml for evaluated Applications that have none").set_defaults(
         func=cmd_application_sync)
+
+    fb = sub.add_parser("feedback", help="log Feedback, find what recurs, keep Company notes and calibrate the rubric")
+    bsub = fb.add_subparsers(dest="action", required=True)
+    p = bsub.add_parser("add", help="add Feedback to an Application from JSON or YAML on stdin")
+    p.add_argument("id")
+    p.add_argument("job")
+    p.add_argument("--file")
+    p.set_defaults(func=cmd_feedback_add)
+    p = bsub.add_parser("update", help="merge fields into one piece of Feedback; a null value removes the field")
+    p.add_argument("id")
+    p.add_argument("job")
+    p.add_argument("entry")
+    p.add_argument("--file")
+    p.set_defaults(func=cmd_feedback_update)
+    p = bsub.add_parser("list", help="list Feedback and its Fix directions")
+    p.add_argument("id", nargs="?")
+    p.add_argument("--job")
+    p.add_argument("--role", help="Role folder name, or part of it")
+    p.add_argument("--company", help="company name, or part of it")
+    p.add_argument("--cause", choices=FEEDBACK_CAUSES)
+    p.add_argument("--state", choices=FEEDBACK_STATES)
+    p.add_argument("--from", dest="origin", choices=FEEDBACK_FROM)
+    p.set_defaults(func=cmd_feedback_list)
+    p = bsub.add_parser("patterns", help="find causes that recur across Applications and what they suggest changing")
+    p.add_argument("id", nargs="?")
+    p.set_defaults(func=cmd_feedback_patterns)
+    bsub.add_parser("companies", help="rewrite Company notes from all Feedback").set_defaults(func=cmd_feedback_companies)
+    bsub.add_parser("calibrate", help="compare Success ratings with closed outcomes").set_defaults(func=cmd_feedback_calibrate)
 
     res = sub.add_parser("resume", help="write the Chinese and English resumes of an evaluated Application")
     vsub = res.add_subparsers(dest="action", required=True)
