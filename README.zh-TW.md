@@ -60,7 +60,7 @@ Agent 會在 `.claude/skills/` 或 `.agents/skills/` 找到 skill，不支援自
 
 ---
 
-關鍵字：獵頭、猎头、人力仲介、求職、找工作、履歷、客製履歷、職缺評估、職缺媒合、投遞追蹤、面試回饋、人力銀行、104、CakeResume、Claude Code skill
+關鍵字：獵頭、人力仲介、求職、找工作、履歷、客製履歷、職缺評估、職缺媒合、投遞追蹤、面試回饋、人力銀行、104、CakeResume、Claude Code skill
 
 ## 授權
 
