@@ -44,7 +44,7 @@ Agent 會在 `.claude/skills/` 或 `.agents/skills/` 找到 skill，不支援自
 /plugin install headhunter@headhunter-agent
 ```
 
-安裝後在 Claude Code 輸入 `/headhunter`。
+安裝後在 Claude Code 輸入 `/headhunter:headhunter`。
 
 ### 在任何資料夾使用其他 AI agent
 

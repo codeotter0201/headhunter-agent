@@ -44,7 +44,7 @@ To use the skill from any folder in Claude Code:
 /plugin install headhunter@headhunter-agent
 ```
 
-Then run `/headhunter` in Claude Code.
+Then run `/headhunter:headhunter` in Claude Code.
 
 ### Other AI agents, from any folder
 
