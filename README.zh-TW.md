@@ -22,6 +22,23 @@
 
 ## 安裝
 
+skill 的輔助腳本需要 Python 3.9 以上，不需安裝其他套件。匯入 GitHub repo 或個人頁面時會用到 [GitHub CLI](https://cli.github.com)（`gh`）。履歷轉成 PDF 時會用到 Google Chrome、Chromium 或 Microsoft Edge。
+
+### Clone 後直接使用（任何 AI agent）
+
+```bash
+git clone https://github.com/codeotter0201/headhunter-agent.git
+cd headhunter-agent
+```
+
+在這個資料夾啟動你的 AI agent，告訴它你想做什麼，例如「把我加為候選人，並匯入這份履歷」。在 Claude Code 也可以輸入 `/headhunter`。要更新時，在這個資料夾執行 `git pull`。
+
+Agent 會在 `.claude/skills/` 或 `.agents/skills/` 找到 skill，不支援自動發現 skill 的 agent 則由 `AGENTS.md` 引導使用。Agent 必須能讀取檔案並執行指令，因此只能對話的 AI 服務無法執行這個 skill。這兩個 skill 資料夾是符號連結：在 Windows 上請先啟用符號連結再 clone，或使用會讀取 `AGENTS.md` 的 agent。
+
+### Claude Code plugin
+
+要在 Claude Code 的任何資料夾使用這個 skill：
+
 ```
 /plugin marketplace add codeotter0201/headhunter-agent
 /plugin install headhunter@headhunter-agent
@@ -29,9 +46,9 @@
 
 安裝後在 Claude Code 輸入 `/headhunter`。
 
-skill 的輔助腳本需要 Python 3.9 以上，不需安裝其他套件。匯入 GitHub repo 或個人頁面時會用到 [GitHub CLI](https://cli.github.com)（`gh`）。履歷轉成 PDF 時會用到 Google Chrome、Chromium 或 Microsoft Edge。
+### 在任何資料夾使用其他 AI agent
 
-其他支援 Agent Skills 格式的 AI agent 也能使用：把 `skills/headhunter/` 複製到該 agent 的 skills 資料夾即可。
+支援 Agent Skills 格式的 agent 可以在任何地方使用這個 skill：把 `skills/headhunter/` 複製到該 agent 的 skills 資料夾即可。
 
 ## 資料只存在本機
 

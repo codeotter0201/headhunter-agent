@@ -22,6 +22,23 @@ A job search piles up more than anyone can keep straight: old resumes, notes, wo
 
 ## Install
 
+The skill's helper script needs Python 3.9 or later, with no extra packages. Importing a GitHub repository or profile uses the [GitHub CLI](https://cli.github.com) (`gh`). Printing resumes to PDF uses Google Chrome, Chromium or Microsoft Edge.
+
+### Clone and run (any AI agent)
+
+```bash
+git clone https://github.com/codeotter0201/headhunter-agent.git
+cd headhunter-agent
+```
+
+Start your AI agent in this folder and tell it what you want, such as "add me as a candidate and import this resume". In Claude Code you can also run `/headhunter`. To update, run `git pull` in this folder.
+
+Agents find the skill in `.claude/skills/` or `.agents/skills/`, and agents without skill discovery are sent to it by `AGENTS.md`. The agent must be able to read files and run commands, so chat-only AI services cannot run the skill. The two skill folders are symbolic links: on Windows, enable them before cloning, or use an agent that reads `AGENTS.md`.
+
+### Claude Code plugin
+
+To use the skill from any folder in Claude Code:
+
 ```
 /plugin marketplace add codeotter0201/headhunter-agent
 /plugin install headhunter@headhunter-agent
@@ -29,9 +46,9 @@ A job search piles up more than anyone can keep straight: old resumes, notes, wo
 
 Then run `/headhunter` in Claude Code.
 
-The skill's helper script needs Python 3.9 or later, with no extra packages. Importing a GitHub repository or profile uses the [GitHub CLI](https://cli.github.com) (`gh`). Printing resumes to PDF uses Google Chrome, Chromium or Microsoft Edge.
+### Other AI agents, from any folder
 
-Other AI agents that support the Agent Skills format can use the skill too: copy `skills/headhunter/` into that agent's skills folder.
+Agents that support the Agent Skills format can use the skill anywhere: copy `skills/headhunter/` into that agent's skills folder.
 
 ## Your data stays local
 
