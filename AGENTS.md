@@ -9,6 +9,13 @@ This repository holds the skill, its plugin packaging, and its specification.
 This file is the single instruction source for every AI agent working in this
 repository, whatever tool or model runs it.
 
+## Using the Skill
+
+When the user asks for job-search work, such as managing candidates, reading or
+evaluating jobs, writing resumes, or tracking applications, read
+`skills/headhunter/SKILL.md` and follow it. The rest of this file applies only
+when changing this repository.
+
 ## Project Constitution
 
 - **Ownership:** Treat the active checkout, branch, and existing work as
@@ -101,6 +108,8 @@ CONTRIBUTING.md               issue, branch, commit, pull request and release ru
 README.md                     product overview (English)
 README.zh-TW.md               product overview (Traditional Chinese)
 skills/headhunter/SKILL.md    the headhunter skill: current behavior and data layout
+.agents/skills/headhunter     link to skills/headhunter for skill discovery
+.claude/skills/headhunter     link to skills/headhunter for skill discovery
 .claude-plugin/               plugin and marketplace manifests
 .github/                      issue forms, PR template, labeler
 .gemini/settings.json         points Gemini CLI to AGENTS.md
