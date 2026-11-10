@@ -1275,6 +1275,19 @@ def replace_section(text: str, heading: str, section: str) -> str:
     return text[:match.start()] + section + ("\n" + text[match.end():] if text[match.end():] else "")
 
 
+STRATEGY_DESCRIPTION = "Target Roles, positioning, and what to strengthen."
+
+
+def strategy_guidance(folder: Path) -> str:
+    """strategy.md without its title, its starting description and the Roles section the script keeps."""
+    path = folder / "strategy.md"
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    text = re.sub(r"(?ms)^## Roles\n.*?(?=^## |\Z)", "", text)
+    text = re.sub(r"\A\s*# Strategy[ \t]*(?:\n|\Z)", "", text)
+    text = re.sub(rf"\A\s*{re.escape(STRATEGY_DESCRIPTION)}[ \t]*(?:\n|\Z)", "", text)
+    return text.strip()
+
+
 def update_strategy_roles(folder: Path) -> None:
     """Rewrite the Roles section of strategy.md from the role.yml files."""
     rows = []
@@ -1974,8 +1987,7 @@ def cmd_candidate_new(args):
     })
     for name in ("sources.yml", "facts.yml", "glossary.yml"):
         write_yaml(folder / name, [])
-    (folder / "strategy.md").write_text(
-        "# Strategy\n\nTarget Roles, positioning, and what to strengthen.\n", encoding="utf-8")
+    (folder / "strategy.md").write_text(f"# Strategy\n\n{STRATEGY_DESCRIPTION}\n", encoding="utf-8")
     print(f"{cid}  {folder}")
 
 
@@ -3031,6 +3043,12 @@ def cmd_resume_plan(args):
     print(f"{candidate_id(args.id)} {profile.get('name')} × {args.job}  {job.get('title')} · {job.get('company')}")
     print(f"Evaluation: {evaluation.get('rating')} ({evaluation.get('score')}) under {slug}; Role profile built "
           f"{profile_md.get('built')} and current\n")
+    guidance = strategy_guidance(folder)
+    if guidance:
+        print("Follow the Candidate's Strategy (strategy.md without its Roles section):")
+        print("\n".join(f"  {line}" if line else "" for line in guidance.splitlines()) + "\n")
+    else:
+        print("Strategy: nothing beyond the Roles yet; strategy.md holds no resume guidance\n")
     print("Start from the Role profile's positioning:")
     print(f"  {positioning.get('headline')}\n  {positioning.get('summary')}")
     print(f"  Facts: {', '.join(positioning.get('facts') or [])}")
