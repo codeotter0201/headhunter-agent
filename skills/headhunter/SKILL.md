@@ -61,7 +61,7 @@ python3 <skill folder>/scripts/hh.py <command>
 | `feedback patterns [<id>]` | Find causes that recur across a Candidate's Applications and what they suggest changing |
 | `feedback companies` | Rewrite the Feedback section of every Company notes file |
 | `feedback calibrate` | Compare Success ratings with closed outcomes and report where the rubric over- or under-estimates |
-| `resume plan <id> <job>` | Show what an Application's resumes start from: the Role profile, the Evaluation's evidence, what to leave out, the usable Facts and the Glossary |
+| `resume plan <id> <job>` | Show what an Application's resumes start from: the Candidate's Strategy, the Role profile, the Evaluation's evidence, what to leave out, the usable Facts and the Glossary |
 | `resume save <id> <job> [--replace]` | Write `resume.zh.md` and `resume.en.md` from JSON or YAML on stdin and print both to PDF; nothing is written if any check fails |
 | `resume pdf <id> <job>` | Check both resumes and print them to PDF again, after editing them by hand |
 | `validate [<id>]` | Check `taxonomy.yml`, Candidate folders (with their Roles, Evaluations, resumes, Applications and Feedback) and Job snapshots |
@@ -413,8 +413,8 @@ Each Evaluation compares one Job snapshot with one Candidate under the Role that
 Write a Chinese and an English resume for an Application worth pursuing, after its Evaluation.
 
 1. **Check**: when the user decides to apply, move the Application to preparing (see Track Applications). It needs an Evaluation made under a Role, and that Role's profile must be current; `resume plan` says which is missing. An Evaluation without a Role needs a Role created from the Job first (Evaluate Jobs, step 7). Add any company, title, school or location still missing from `glossary.yml`, and `contact` and `name_en` to `profile.yml` if the user gives them.
-2. **Plan**: `resume plan <id> <job>` shows the Role profile's positioning and the order of its evidence, the Facts the Evaluation cites for each Job requirement, what to leave out, every usable Fact by kind, and the Glossary.
-3. **Write**: start from the positioning and the evidence order, then reorder and rewrite the Facts for this Job: the most relevant first, the Job's wording where the Facts support it. Write each line in both languages, one claim per line, with the Facts it comes from. Use only what the cited Facts say: no new numbers, titles, dates or skills. Requirements the Candidate lacks stay in the Evaluation as gaps.
+2. **Plan**: `resume plan <id> <job>` shows the Candidate's Strategy without its Roles section, the Role profile's positioning and the order of its evidence, the Facts the Evaluation cites for each Job requirement, what to leave out, every usable Fact by kind, and the Glossary.
+3. **Write**: start from the positioning and the evidence order, then reorder and rewrite the Facts for this Job: the most relevant first, the Job's wording where the Facts support it. Write each line in both languages, one claim per line, with the Facts it comes from. Use only what the cited Facts say: no new numbers, titles, dates or skills. Requirements the Candidate lacks stay in the Evaluation as gaps. Follow the Strategy's resume guidance, such as which title to use or which experience to leave out. Viewpoints in the Strategy may shape the wording of the summary and positioning, but never replace sourced Facts: every claim still cites its Facts.
 4. **Save**: pipe the resume to `resume save <id> <job>`; it writes both Markdown files and PDFs. Use `--replace` to write them again.
 5. **Hand edits**: after the user edits a Markdown file, run `resume pdf <id> <job>`.
 6. **Report** the four files, and remind the user that the resumes leave out the gaps listed in the Evaluation.
