@@ -120,6 +120,13 @@ High, medium, or low, with reasons, from the Fit score and the Hard
 requirements. A rule-based estimate, never a probability.
 _Avoid_: success probability, chance, odds
 
+**Master resume**:
+The Candidate's complete resume, one in Chinese and one in English: every
+active, sourced Fact written out in full and grouped as a resume, or listed as
+left out with a reason, with the gaps still to fill marked in place. It is
+internal and never sent; extracts for specific contexts start from it.
+_Avoid_: base resume, full CV, career document
+
 **Tailored resume**:
 The pair of resumes written for one Application, one in Chinese and one in
 English, starting from the Role profile of the Application's Role and using only

@@ -124,6 +124,20 @@ RESUME_HEADINGS = {
            "skills": "Skills"},
 }
 RESUME_FIELDS = ("headline", "summary", "experience", "projects", "education", "certificates", "skills")
+MASTER_FIELDS = ("headline", "summary", "skills", "highlights", "experience", "projects", "education", "certificates",
+                 "awards", "languages", "left_out")
+MASTER_HEADINGS = {
+    "zh": {"summary": "專業摘要", "skills": "技能", "highlights": "核心亮點", "experience": "工作經歷", "projects": "專案",
+           "education": "學歷", "certificates": "證照與訓練", "awards": "獎項、發表、演講與專利", "languages": "語言",
+           "gaps": "待補", "left_out": "未寫入"},
+    "en": {"summary": "Summary", "skills": "Skills", "highlights": "Highlights", "experience": "Experience",
+           "projects": "Projects", "education": "Education", "certificates": "Certificates and Training",
+           "awards": "Awards, Publications, Talks and Patents", "languages": "Languages", "gaps": "Gaps",
+           "left_out": "Left out"},
+}
+MASTER_LABELS = {"zh": {"scope": "範疇：", "tech": "技術："}, "en": {"scope": "Scope: ", "tech": "Tech: "}}
+GAP_MARKS = {"zh": ("【待補：", "】"), "en": ("[To fill: ", "]")}
+GAP_MARK = re.compile(r"\s*(?:【待補：[^】]*】|\[To fill: [^\]]*\])")
 BROWSERS = (  # Chrome, Chromium or Edge, used headless to print resumes to PDF
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
@@ -652,6 +666,13 @@ def validate_candidate(folder: Path, known_tags: set) -> list:
             err(f"resume {jid}: {path.name} must be resume.zh.md or resume.en.md")
             continue
         errors.extend(f"{name}: {e}" for e in check_resume(path, lang, by_id))
+    masters = master_paths(folder)
+    if any(path.exists() for path in masters.values()):
+        for lang, path in masters.items():
+            if path.exists():
+                errors.extend(f"{name}: {e}" for e in check_master(path, lang, by_id))
+            else:
+                err(f"master resume: {path.name} is missing; write both with master save --replace")
     for jid, path in application_dirs(folder):
         if not (path / "status.yml").exists():
             if (path / "evaluation.md").exists() or list(path.glob("resume.*")):
@@ -1687,18 +1708,90 @@ def check_resume(path: Path, lang: str, by_id: dict) -> list:
         if not cite:
             errors.append(f"{where}: line {n} cites no Fact; end it with <!-- f-001 --> or remove it: {text[:60]}")
             continue
-        ids = [fid for fid in cite.group(1).split(", ") if fid != "profile"]
-        for fid in ids:
-            if fid not in by_id:
-                errors.append(f"{where}: line {n} cites unknown Fact {fid}")
-        pool = " ".join(str(by_id.get(f, {}).get(k) or "") for f in ids for k in ("statement", "period"))
-        allowed = set(NUMBER.findall(re.sub(r"(?<=\d),(?=\d{3})", "", pool)))
-        used = set(NUMBER.findall(re.sub(r"(?<=\d),(?=\d{3})", "", text[:cite.start()]))) if ids else set()
-        for number in sorted(used - allowed):
-            errors.append(f"{where}: line {n} has the number {number}, which is not in {', '.join(ids)}")
-        if lang == "en" and HAN.search(text[:cite.start()]):
-            errors.append(f"{where}: line {n} has Chinese text; use the English names from glossary.yml: {text[:60]}")
+        errors += check_claim(where, n, text, text[:cite.start()], cite, lang, by_id)
     return errors
+
+
+def check_claim(where: str, n: int, text: str, claim: str, cite, lang: str, by_id: dict) -> list:
+    """Problems in one resume line that cites Facts: unknown Facts, numbers they do not hold, Chinese in English."""
+    errors = []
+    ids = [fid for fid in cite.group(1).split(", ") if fid != "profile"]
+    for fid in ids:
+        if fid not in by_id:
+            errors.append(f"{where}: line {n} cites unknown Fact {fid}")
+    pool = " ".join(str(by_id.get(f, {}).get(k) or "") for f in ids for k in ("statement", "period"))
+    allowed = set(NUMBER.findall(re.sub(r"(?<=\d),(?=\d{3})", "", pool)))
+    used = set(NUMBER.findall(re.sub(r"(?<=\d),(?=\d{3})", "", claim))) if ids else set()
+    for number in sorted(used - allowed):
+        errors.append(f"{where}: line {n} has the number {number}, which is not in {', '.join(ids)}")
+    if lang == "en" and HAN.search(text[:cite.start()]):
+        errors.append(f"{where}: line {n} has Chinese text; use the English names from glossary.yml: {text[:60]}")
+    return errors
+
+
+def master_paths(folder: Path) -> dict:
+    return {lang: folder / f"master-resume.{lang}.md" for lang in RESUME_LANGS}
+
+
+def check_master(path: Path, lang: str, by_id: dict) -> list:
+    """Problems in the Master resume's Markdown, checked like a Tailored resume's. A line that holds only a gap marker
+    cites nothing, and the Gaps and Left out appendices need only name known Facts."""
+    where = f"master resume {lang}"
+    try:
+        front, body = read_job(path)
+    except HHError as exc:
+        return [str(exc)]
+    errors = []
+    if front.get("lang") != lang:
+        errors.append(f"{where}: lang must be {lang}")
+    appendices = {f"## {MASTER_HEADINGS[lang][key]}" for key in ("gaps", "left_out")}
+    in_appendix = False
+    for n, line in enumerate(body.splitlines(), 1):
+        text = line.strip()
+        if text.startswith("## "):
+            in_appendix = text in appendices
+            continue
+        if not text or re.match(r"(?:#|####) ", text):
+            continue
+        if in_appendix:
+            errors += [f"{where}: line {n} names unknown Fact {fid}" for fid in re.findall(r"\bf-\d+\b", text)
+                       if fid not in by_id]
+            if lang == "en" and HAN.search(text):
+                errors.append(f"{where}: line {n} has Chinese text: {text[:60]}")
+            continue
+        cite = CITATION.search(text)
+        claim = GAP_MARK.sub("", text[:cite.start()] if cite else text)
+        if cite:
+            errors += check_claim(where, n, text, claim, cite, lang, by_id)
+            continue
+        rest = re.sub(r"^-\s*", "", claim.strip())
+        rest = next((rest[len(label):] for label in MASTER_LABELS[lang].values() if rest.startswith(label)), rest)
+        if GAP_MARK.search(text) and not re.sub(r"^\*\*[^*]+\*\*[：:]\s*", "", rest).strip():
+            continue
+        errors.append(f"{where}: line {n} cites no Fact; end it with <!-- f-001 --> or remove it: {text[:60]}")
+    return errors
+
+
+def master_stale(folder: Path, facts: list) -> list:
+    """Reasons the Master resume is out of date; empty when it is current."""
+    path = master_paths(folder)["zh"]
+    if not path.exists():
+        return ["not written yet"]
+    try:
+        front, _ = read_job(path)
+    except HHError as exc:
+        return [str(exc)]
+    built = front.get("built_from") or {}
+    covered = built.get("facts") or {}
+    current = {f.get("id"): f for f in facts if isinstance(f, dict)}
+    changed = [fid for fid, value in covered.items() if fid in current and digest(current[fid]) != str(value)]
+    removed = [fid for fid in covered if fid not in current]
+    uncovered = [fid for fid in current if fid not in covered and not fact_problem(current, fid)]
+    reasons = [f"{label}: {', '.join(ids)}" for label, ids in
+               (("changed", changed), ("removed", removed), ("not covered", uncovered)) if ids]
+    if built.get("strategy") != digest(strategy_guidance(folder)):
+        reasons.append("strategy.md changed")
+    return reasons
 
 
 def render_period(value, lang: str) -> str:
@@ -1706,6 +1799,109 @@ def render_period(value, lang: str) -> str:
     if not sep:
         return start
     return f"{start} – {('至今' if lang == 'zh' else 'Present') if end in ('present', '') else end}"
+
+
+class ResumeWriter:
+    """The Chinese and English lines of a resume, and every problem found while writing them, so that nothing is
+    written unless all checks pass. Tailored resumes and the Master resume both use it."""
+
+    def __init__(self, facts: list, glossary):
+        self.by_id = {f.get("id"): f for f in facts if isinstance(f, dict)}
+        self.pairs = glossary_pairs(glossary)
+        self.errors, self.texts = [], []
+        self.lines = {lang: [] for lang in RESUME_LANGS}
+
+    def cited(self, item, where) -> list:
+        """The usable Facts an item cites; a problem for each one it cannot cite."""
+        ids = item.get("facts") if isinstance(item, dict) else None
+        if not isinstance(ids, list) or not ids:
+            self.errors.append(f"{where}: list the Facts it comes from")
+            return []
+        good = []
+        for fid in ids:
+            problem = fact_problem(self.by_id, fid)
+            if problem:
+                self.errors.append(f"{where}: {problem}")
+            else:
+                good.append(fid)
+        return good
+
+    def bilingual(self, item, where, ids) -> dict:
+        """An item's zh and en text, whose numbers must all be in the Facts it cites."""
+        text = {lang: str(item.get(lang) or "").strip() for lang in RESUME_LANGS}
+        if not all(text.values()):
+            self.errors.append(f"{where}: needs zh and en")
+        pool = " ".join(str(self.by_id[f].get(k) or "") for f in ids for k in ("statement", "period"))
+        allowed = set(NUMBER.findall(re.sub(r"(?<=\d),(?=\d{3})", "", pool)))
+        used = {n for value in text.values() for n in NUMBER.findall(re.sub(r"(?<=\d),(?=\d{3})", "", value))}
+        for number in sorted(used - allowed):
+            self.errors.append(f"{where}: the number {number} is not in {', '.join(ids) or 'its Facts'}")
+        self.texts.append((where, text))
+        return text
+
+    def label(self, item, where) -> dict:
+        """A label's zh and en text, such as a heading; it states no claim, so it cites no Facts."""
+        text = {lang: str(item.get(lang) or "").strip() if isinstance(item, dict) else "" for lang in RESUME_LANGS}
+        if not all(text.values()):
+            self.errors.append(f"{where}: needs zh and en")
+        self.texts.append((where, text))
+        return text
+
+    def add(self, lang_lines: dict, ids) -> None:
+        note = f" <!-- {', '.join(ids)} -->" if ids else ""
+        for lang in RESUME_LANGS:
+            self.lines[lang].append(lang_lines[lang] + note)
+
+    def blank(self) -> None:
+        for lang in RESUME_LANGS:
+            self.lines[lang].append("")
+
+    def heading(self, title: dict) -> None:
+        for lang in RESUME_LANGS:
+            self.lines[lang] += ["", f"## {title[lang]}", ""]
+
+    def header(self, profile: dict) -> None:
+        """The name, location and contact from profile.yml."""
+        name_en = str(profile.get("name_en") or "").strip()
+        if not name_en:
+            self.errors.append("profile.yml needs name_en for the English resume")
+        self.lines["zh"].append(f"# {profile.get('name')}")
+        self.lines["en"].append(f"# {name_en}")
+        header = {"zh": [], "en": []}
+        location = profile.get("location")
+        if location:
+            pair = self.pairs.get(str(location))
+            english = pair[1] if pair else (str(location) if not HAN.search(str(location)) else None)
+            if not english:
+                self.errors.append(f"add the location {location!r} to glossary.yml as a term so the English resume can "
+                                   "name it")
+            header["zh"].append(str(location))
+            header["en"].append(english or "")
+        contact = profile.get("contact") if isinstance(profile.get("contact"), dict) else {}
+        for value in [contact.get("email"), contact.get("phone"), *(contact.get("links") or [])]:
+            if value:
+                header["zh"].append(str(value))
+                header["en"].append(str(value))
+        if header["zh"]:
+            for lang in RESUME_LANGS:
+                self.lines[lang] += ["", " · ".join(header[lang]) + " <!-- profile -->"]
+
+    def finish(self) -> None:
+        """Check Glossary names and English text across everything written, then raise if anything failed."""
+        for zh, en in sorted(set(self.pairs.values())):
+            for where, text in self.texts:
+                if zh in text["zh"] and en.lower() not in text["en"].lower():
+                    self.errors.append(f"{where}: glossary.yml names {zh} as {en!r} in English")
+                elif term_used(en, text["en"]) and zh not in text["zh"] or term_used(en, text["zh"]):
+                    self.errors.append(f"{where}: glossary.yml names {en} as {zh!r} in Chinese")
+        for where, text in self.texts:
+            if HAN.search(text["en"]):
+                self.errors.append(f"{where}: the English text has Chinese in it: {text['en'][:60]}")
+        if self.errors:
+            raise HHError("nothing written:\n  " + "\n  ".join(dict.fromkeys(self.errors)))
+
+    def body(self, lang: str) -> str:
+        return re.sub(r"\n{3,}", "\n\n", "\n".join(self.lines[lang])).strip()
 
 
 # ---------------------------------------------------------------- applications
@@ -2038,6 +2234,13 @@ def cmd_candidate_show(args):
         text = re.split(r"(?m)^## Roles\n", strategy.read_text(encoding="utf-8"))[0]
         lines = [line.strip() for line in text.splitlines() if line.strip() and not line.startswith("#")]
         print("Strategy: " + (" ".join(lines[:3]) if lines else "-"))
+    stale = master_stale(folder, facts)
+    if stale == ["not written yet"]:
+        print("Master resume: not written")
+    else:
+        master = master_paths(folder)["zh"]
+        written = read_job(master)[0].get("written") if master.exists() else None
+        print(f"Master resume: written {written}, " + (f"stale ({'; '.join(stale)})" if stale else "current"))
     roles = role_dirs(folder)
     print(f"Roles: {len(roles)}")
     for slug, path in roles:
@@ -3043,12 +3246,7 @@ def cmd_resume_plan(args):
     print(f"{candidate_id(args.id)} {profile.get('name')} × {args.job}  {job.get('title')} · {job.get('company')}")
     print(f"Evaluation: {evaluation.get('rating')} ({evaluation.get('score')}) under {slug}; Role profile built "
           f"{profile_md.get('built')} and current\n")
-    guidance = strategy_guidance(folder)
-    if guidance:
-        print("Follow the Candidate's Strategy (strategy.md without its Roles section):")
-        print("\n".join(f"  {line}" if line else "" for line in guidance.splitlines()) + "\n")
-    else:
-        print("Strategy: nothing beyond the Roles yet; strategy.md holds no resume guidance\n")
+    print_strategy(folder)
     print("Start from the Role profile's positioning:")
     print(f"  {positioning.get('headline')}\n  {positioning.get('summary')}")
     print(f"  Facts: {', '.join(positioning.get('facts') or [])}")
@@ -3073,10 +3271,19 @@ def cmd_resume_plan(args):
             mark = "*" if fact["id"] in cited else " "
             details = " ".join(str(fact[k]) for k in ("period", "org") if fact.get(k))
             print(f"  {mark} {fact['id']} [{kind}, {fact.get('evidence')}] {details}  {fact.get('statement')}")
+    print_unusable(facts, by_id)
+    print_glossary_and_header(profile, glossary)
+
+
+def print_unusable(facts: list, by_id: dict) -> None:
     unusable = [f"{f['id']} ({f.get('state') if f.get('state') != 'active' else 'inferred, unconfirmed'})"
                 for f in facts if fact_problem(by_id, f.get("id"))]
     if unusable:
         print("  Never use: " + ", ".join(unusable))
+
+
+def print_glossary_and_header(profile: dict, glossary) -> None:
+    """The Glossary names a resume must use, and what its header will show."""
     print("\nGlossary:")
     for kind in GLOSSARY_KINDS:
         names = sorted({pair for pair in glossary_pairs(glossary, (kind,)).values()})
@@ -3092,6 +3299,15 @@ def cmd_resume_plan(args):
           f"contact {' · '.join(reach) or 'none; add contact (email, phone, links) to profile.yml'}")
 
 
+def print_strategy(folder: Path) -> None:
+    guidance = strategy_guidance(folder)
+    if guidance:
+        print("Follow the Candidate's Strategy (strategy.md without its Roles section):")
+        print("\n".join(f"  {line}" if line else "" for line in guidance.splitlines()) + "\n")
+    else:
+        print("Strategy: nothing beyond the Roles yet; strategy.md holds no resume guidance\n")
+
+
 def cmd_resume_save(args):
     root = data_dir()
     folder = find_candidate(root, args.id, archived=False)
@@ -3105,64 +3321,11 @@ def cmd_resume_save(args):
     taxonomy = load_taxonomy(root)
     candidate = load_candidate(folder)
     profile, facts, glossary = candidate["profile"], candidate["facts"], candidate["glossary"]
-    by_id = {f.get("id"): f for f in facts if isinstance(f, dict)}
-    errors = [f"unknown field {key!r}; fields are {', '.join(RESUME_FIELDS)}" for key in data if key not in RESUME_FIELDS]
-    texts, lines = [], {lang: [] for lang in RESUME_LANGS}
-
-    def cited(item, where) -> list:
-        ids = item.get("facts") if isinstance(item, dict) else None
-        if not isinstance(ids, list) or not ids:
-            errors.append(f"{where}: list the Facts it comes from")
-            return []
-        good = []
-        for fid in ids:
-            problem = fact_problem(by_id, fid)
-            if problem:
-                errors.append(f"{where}: {problem}")
-            else:
-                good.append(fid)
-        return good
-
-    def bilingual(item, where, ids) -> dict:
-        text = {lang: str(item.get(lang) or "").strip() for lang in RESUME_LANGS}
-        if not all(text.values()):
-            errors.append(f"{where}: needs zh and en")
-        pool = " ".join(str(by_id[f].get(k) or "") for f in ids for k in ("statement", "period"))
-        allowed = set(NUMBER.findall(re.sub(r"(?<=\d),(?=\d{3})", "", pool)))
-        used = {n for value in text.values() for n in NUMBER.findall(re.sub(r"(?<=\d),(?=\d{3})", "", value))}
-        for number in sorted(used - allowed):
-            errors.append(f"{where}: the number {number} is not in {', '.join(ids) or 'its Facts'}")
-        texts.append((where, text))
-        return text
-
-    def add(lang_lines: dict, ids) -> None:
-        note = f" <!-- {', '.join(ids)} -->"
-        for lang in RESUME_LANGS:
-            lines[lang].append(lang_lines[lang] + note)
-
-    pairs = glossary_pairs(glossary)
-    name_en = str(profile.get("name_en") or "").strip()
-    if not name_en:
-        errors.append("profile.yml needs name_en for the English resume")
-    lines["zh"].append(f"# {profile.get('name')}")
-    lines["en"].append(f"# {name_en}")
-    header = {"zh": [], "en": []}
-    location = profile.get("location")
-    if location:
-        pair = pairs.get(str(location))
-        english = pair[1] if pair else (str(location) if not HAN.search(str(location)) else None)
-        if not english:
-            errors.append(f"add the location {location!r} to glossary.yml as a term so the English resume can name it")
-        header["zh"].append(str(location))
-        header["en"].append(english or "")
-    contact = profile.get("contact") if isinstance(profile.get("contact"), dict) else {}
-    for value in [contact.get("email"), contact.get("phone"), *(contact.get("links") or [])]:
-        if value:
-            header["zh"].append(str(value))
-            header["en"].append(str(value))
-    if header["zh"]:
-        for lang in RESUME_LANGS:
-            lines[lang] += ["", " · ".join(header[lang]) + " <!-- profile -->"]
+    writer = ResumeWriter(facts, glossary)
+    by_id, errors, lines = writer.by_id, writer.errors, writer.lines
+    cited, bilingual, add = writer.cited, writer.bilingual, writer.add
+    errors += [f"unknown field {key!r}; fields are {', '.join(RESUME_FIELDS)}" for key in data if key not in RESUME_FIELDS]
+    writer.header(profile)
 
     for key in ("headline", "summary"):
         item = data.get(key)
@@ -3179,8 +3342,7 @@ def cmd_resume_save(args):
         add({lang: f"**{text[lang]}**" if key == "headline" else text[lang] for lang in RESUME_LANGS}, ids)
 
     def section(key) -> None:
-        for lang in RESUME_LANGS:
-            lines[lang] += ["", f"## {RESUME_HEADINGS[lang][key]}", ""]
+        writer.heading({lang: RESUME_HEADINGS[lang][key] for lang in RESUME_LANGS})
 
     companies, titles, schools = (glossary_pairs(glossary, (k,)) for k in ("company", "title", "school"))
     if data.get("experience"):
@@ -3266,26 +3428,16 @@ def cmd_resume_save(args):
              "en": "- " + ", ".join(str(t.get("en")) for t in skills)}, sorted(skill_facts, key=lambda f: id_number(f, "f") or 0))
 
     for term, rid in lacking_terms(job, evaluation, facts, taxonomy).items():
-        for where, text in texts:
+        for where, text in writer.texts:
             if any(term_used(term, value) for value in text.values()):
                 errors.append(f"{where}: {term!r} belongs to {rid}, which the Candidate lacks; leave it out")
-    for zh, en in sorted(set(pairs.values())):
-        for where, text in texts:
-            if zh in text["zh"] and en.lower() not in text["en"].lower():
-                errors.append(f"{where}: glossary.yml names {zh} as {en!r} in English")
-            elif term_used(en, text["en"]) and zh not in text["zh"] or term_used(en, text["zh"]):
-                errors.append(f"{where}: glossary.yml names {en} as {zh!r} in Chinese")
-    for where, text in texts:
-        if HAN.search(text["en"]):
-            errors.append(f"{where}: the English text has Chinese in it: {text['en'][:60]}")
-    if errors:
-        raise HHError("nothing written:\n  " + "\n  ".join(dict.fromkeys(errors)))
+    writer.finish()
 
     base.mkdir(parents=True, exist_ok=True)
     for lang in RESUME_LANGS:
         front = {"candidate": candidate_id(args.id), "job": args.job, "role": slug, "lang": lang, "written": today(),
                  "role_profile": profile_md.get("built")}
-        body = re.sub(r"\n{3,}", "\n\n", "\n".join(lines[lang])).strip()
+        body = writer.body(lang)
         (base / f"resume.{lang}.md").write_text(f"---\n{hhyaml.dumps(front)}---\n\n{body}\n", encoding="utf-8")
         print(base / f"resume.{lang}.md")
     for line in write_pdfs(base, str(profile.get("name"))):
@@ -3316,6 +3468,294 @@ def cmd_resume_pdf(args):
     profile = read_yaml(folder / "profile.yml", {})
     for line in write_pdfs(base, str(profile.get("name") if isinstance(profile, dict) else "")):
         print(line)
+
+
+def cmd_master_plan(args):
+    root = data_dir()
+    folder = find_candidate(root, args.id, archived=False)
+    data = load_candidate(folder)
+    profile, facts, glossary = data["profile"], data["facts"], data["glossary"]
+    by_id = {f.get("id"): f for f in facts if isinstance(f, dict)}
+    stale = master_stale(folder, facts)
+    written = stale != ["not written yet"]
+    covered = set((read_job(master_paths(folder)["zh"])[0].get("built_from") or {}).get("facts") or {}) if written else set()
+    print(f"{candidate_id(args.id)} {profile.get('name')}: Master resume "
+          + ("not written yet" if not written else f"stale ({'; '.join(stale)})" if stale else "current") + "\n")
+    print_strategy(folder)
+    usable = [f for f in facts if isinstance(f, dict) and not fact_problem(by_id, f.get("id"))]
+    groups = {}
+    for fact in usable:
+        groups.setdefault(str(fact.get("org") or ""), []).append(fact)
+
+    def latest(org: str) -> int:
+        ends = [period_months(f.get("period")) for f in groups[org]]
+        return max((10 ** 6 if end is None and start is not None else end or -1 for start, end in ends), default=-1)
+
+    print(f"Write every one of these {len(usable)} Facts, or list it under left_out with a reason"
+          + (" (+ not in the current Master resume)" if written else "") + ":")
+    for org in sorted(groups, key=lambda o: (not o, -latest(o))):
+        print(f"  {org or '(no organization)'}")
+        for kind in FACT_KINDS:
+            for fact in (f for f in groups[org] if f.get("kind") == kind):
+                mark = "+" if written and fact["id"] not in covered else " "
+                missing = f"  (missing: {', '.join(fact['missing'])})" if fact.get("missing") else ""
+                print(f"  {mark} {fact['id']} [{kind}, {fact.get('evidence')}] {fact.get('period') or '-'}  "
+                      f"{fact.get('statement')}{missing}")
+    print_unusable(facts, by_id)
+    print_glossary_and_header(profile, glossary)
+
+
+def cmd_master_save(args):
+    root = data_dir()
+    folder = find_candidate(root, args.id, archived=False)
+    paths = master_paths(folder)
+    if any(p.exists() for p in paths.values()) and not args.replace:
+        raise HHError("the Master resume already exists; pass --replace to write it again")
+    data = read_payload(args)
+    if not isinstance(data, dict):
+        raise HHError("the Master resume must be a mapping")
+    candidate = load_candidate(folder)
+    profile, facts, glossary = candidate["profile"], candidate["facts"], candidate["glossary"]
+    writer = ResumeWriter(facts, glossary)
+    by_id, errors = writer.by_id, writer.errors
+    errors += [f"unknown field {key!r}; fields are {', '.join(MASTER_FIELDS)}" for key in data if key not in MASTER_FIELDS]
+    companies, titles, schools = (glossary_pairs(glossary, (k,)) for k in ("company", "title", "school"))
+    cited, body_ids, highlight_ids, gaps = set(), set(), {}, []
+
+    def items(key) -> list:
+        value = data.get(key) or []
+        if key == "summary" and isinstance(value, dict):
+            value = [value]
+        if not isinstance(value, list):
+            errors.append(f"{key} must be a list")
+            return []
+        return value
+
+    def section(key) -> dict:
+        title = {lang: MASTER_HEADINGS[lang][key] for lang in RESUME_LANGS}
+        writer.heading(title)
+        return title
+
+    def line(item, where, place, fmt=lambda lang, text: text) -> list:
+        """Write one line in both languages: its text and Facts, or only a gap marker; return the Facts it cites."""
+        if not isinstance(item, dict):
+            errors.append(f"{where}: must be a mapping with zh, en and facts")
+            return []
+        gap = item.get("gap")
+        if gap is not None:
+            gap = writer.label(gap, f"{where} gap")
+        if gap is None or any(item.get(lang) for lang in RESUME_LANGS):
+            ids = writer.cited(item, where)
+            text = writer.bilingual(item, where, ids)
+        else:
+            ids = writer.cited(item, where) if item.get("facts") else []
+            text = {lang: "" for lang in RESUME_LANGS}
+        if gap is not None:
+            text = {lang: f"{text[lang]}{'' if lang == 'zh' else ' '}{GAP_MARKS[lang][0]}{gap[lang]}{GAP_MARKS[lang][1]}"
+                    .strip() for lang in RESUME_LANGS}
+            gaps.append((place, gap, ids))
+        cited.update(ids)
+        writer.add({lang: fmt(lang, text[lang]) for lang in RESUME_LANGS}, ids)
+        return ids
+
+    def bullet(lang, text):
+        return f"- {text}"
+
+    def at_org(ids, company) -> bool:
+        return any(by_id[f].get("org") and any(str(by_id[f]["org"]) in name or name in str(by_id[f]["org"])
+                                               for name in company) for f in ids)
+
+    def titled(item, where, ids, parts) -> None:
+        """Add the title and period of an Experience heading or title line, checked against its Facts."""
+        if item.get("title"):
+            title = titles.get(str(item["title"]))
+            if not title:
+                errors.append(f"{where}: add the title {item['title']!r} to glossary.yml")
+            elif not any(t in str(by_id[f].get("statement")) for f in ids for t in title):
+                errors.append(f"{where}: the title {item['title']!r} is not in its Facts; leave it out or ask the user")
+            else:
+                parts["zh"].append(title[0])
+                parts["en"].append(title[1])
+        if item.get("period") is not None:
+            if str(item["period"]) not in {str(by_id[f].get("period")) for f in ids}:
+                errors.append(f"{where}: period must be the period of one of its Facts")
+            for lang in RESUME_LANGS:
+                parts[lang].append(render_period(item["period"], lang))
+
+    writer.header(profile)
+    headline = data.get("headline")
+    if not isinstance(headline, dict):
+        errors.append("headline is required, with zh, en and facts")
+    else:
+        writer.blank()
+        line(headline, "headline", {lang: "" for lang in RESUME_LANGS}, lambda lang, text: f"**{text}**")
+    summary = items("summary")
+    if not summary:
+        errors.append("summary is required: one or more sentences, each with zh, en and facts")
+    place = section("summary")
+    for n, item in enumerate(summary, 1):
+        line(item, f"summary {n}", place)
+
+    if items("skills"):
+        place = section("skills")
+    for n, item in enumerate(items("skills"), 1):
+        where = f"skills {n}"
+        group = writer.label(item.get("label"), f"{where} label") if isinstance(item, dict) and item.get("label") else None
+        line(item, where, place, (lambda lang, text, g=group: f"- **{g[lang]}**{'：' if lang == 'zh' else ': '}{text}")
+             if group else bullet)
+
+    if items("highlights"):
+        place = section("highlights")
+    for n, item in enumerate(items("highlights"), 1):
+        highlight_ids[f"highlights {n}"] = line(item, f"highlights {n}", place, bullet)
+
+    if items("experience"):
+        section("experience")
+    for n, block in enumerate(items("experience"), 1):
+        where = f"experience {n}"
+        if not isinstance(block, dict):
+            errors.append(f"{where}: must be a mapping")
+            continue
+        ids = writer.cited(block, where)
+        org, name = block.get("org"), block.get("name")
+        if bool(org) == bool(name):
+            errors.append(f"{where}: give org, a company in glossary.yml, or name, for a self-directed stretch")
+            continue
+        if org:
+            company = companies.get(str(org))
+            if not company:
+                errors.append(f"{where}: add the company {org!r} to glossary.yml")
+                continue
+            if not at_org(ids, company):
+                errors.append(f"{where}: cite a Fact at {org}")
+            parts = {"zh": [company[0]], "en": [company[1]]}
+        else:
+            label = writer.label(name, f"{where} name")
+            parts = {lang: [label[lang]] for lang in RESUME_LANGS}
+        titled(block, where, ids, parts)
+        place = {lang: " · ".join(parts[lang][:2 if block.get("title") else 1]) for lang in RESUME_LANGS}
+        cited.update(ids)
+        body_ids.update(ids)
+        writer.add({lang: f"### {' · '.join(parts[lang])}" for lang in RESUME_LANGS}, ids)
+        writer.blank()
+        for m, role in enumerate(block.get("roles") or [], 1):
+            role_where = f"{where} role {m}"
+            role_ids = writer.cited(role, role_where)
+            company = companies.get(str(role.get("org") or "")) if isinstance(role, dict) else None
+            if not company:
+                errors.append(f"{role_where}: give org, a company in glossary.yml")
+                continue
+            if not at_org(role_ids, company):
+                errors.append(f"{role_where}: cite a Fact at {role.get('org')}")
+            role_parts = {"zh": [company[0]], "en": [company[1]]}
+            titled(role, role_where, role_ids, role_parts)
+            cited.update(role_ids)
+            body_ids.update(role_ids)
+            writer.add({lang: f"- {' · '.join(role_parts[lang])}" for lang in RESUME_LANGS}, role_ids)
+        if block.get("roles"):
+            writer.blank()
+        for key in ("context", "scope"):
+            if block.get(key) is not None:
+                body_ids.update(line(block[key], f"{where} {key}", place,
+                                     lambda lang, text, k=key: MASTER_LABELS[lang].get(k, "") + text))
+        for m, group in enumerate(block.get("groups") or [], 1):
+            group_where = f"{where} group {m}"
+            if not isinstance(group, dict):
+                errors.append(f"{group_where}: must be a mapping with bullets")
+                continue
+            writer.blank()
+            if group.get("heading"):
+                heading = writer.label(group["heading"], f"{group_where} heading")
+                writer.add({lang: f"#### {heading[lang]}" for lang in RESUME_LANGS}, [])
+                writer.blank()
+            if not group.get("bullets"):
+                errors.append(f"{group_where}: needs bullets")
+            for k, item in enumerate(group.get("bullets") or [], 1):
+                body_ids.update(line(item, f"{group_where} bullet {k}", place, bullet))
+        if block.get("tech") is not None:
+            writer.blank()
+            body_ids.update(line(block["tech"], f"{where} tech", place,
+                                 lambda lang, text: MASTER_LABELS[lang]["tech"] + text))
+        writer.blank()
+
+    for key in ("projects", "education", "certificates", "awards", "languages"):
+        if items(key):
+            place = section(key)
+        for n, item in enumerate(items(key), 1):
+            where = f"{key} {n}"
+            lead, period = {lang: [] for lang in RESUME_LANGS}, None
+            if key == "education" and isinstance(item, dict):
+                ids = [f for f in item.get("facts") or [] if not fact_problem(by_id, f)]
+                if item.get("school"):
+                    school = schools.get(str(item["school"]))
+                    if not school:
+                        errors.append(f"{where}: add the school {item['school']!r} to glossary.yml")
+                        continue
+                    if not any(s in str(by_id[f].get("statement")) for f in ids for s in school):
+                        errors.append(f"{where}: the school is not in its Facts")
+                    lead = {lang: [school[RESUME_LANGS.index(lang)]] for lang in RESUME_LANGS}
+                period = item.get("period")
+                if period is not None and str(period) not in {str(by_id[f].get("period")) for f in ids}:
+                    errors.append(f"{where}: period must be the period of one of its Facts")
+            found = line(item, where, place, lambda lang, text, lead=lead, period=period: "- " + " · ".join(
+                lead[lang] + [text] + ([render_period(period, lang)] if period is not None else [])))
+            if key == "projects":
+                body_ids.update(found)
+
+    left = {}
+    for n, entry in enumerate(items("left_out"), 1):
+        where = f"left_out {n}"
+        ids = entry.get("facts") if isinstance(entry, dict) else None
+        if not isinstance(ids, list) or not ids:
+            errors.append(f"{where}: list the Facts it leaves out")
+            continue
+        reason = writer.label(entry, where)
+        for fid in ids:
+            problem = fact_problem(by_id, fid)
+            if problem:
+                errors.append(f"{where}: {problem}; only active, sourced Facts need listing")
+            elif fid in cited:
+                errors.append(f"{where}: {fid} is cited by a line; leave it out of left_out")
+            else:
+                left[fid] = reason
+    uncovered = [f["id"] for f in facts if isinstance(f, dict) and not fact_problem(by_id, f.get("id"))
+                 and f["id"] not in cited and f["id"] not in left]
+    if uncovered:
+        errors.append(f"cite {', '.join(uncovered)} in a line, or list them under left_out with a reason")
+    for where, ids in highlight_ids.items():
+        for fid in ids:
+            if fid not in body_ids:
+                errors.append(f"{where}: {fid} is cited by no Experience or Projects line; Highlights summarize them")
+    writer.finish()
+
+    if gaps:
+        writer.heading({lang: MASTER_HEADINGS[lang]["gaps"] for lang in RESUME_LANGS})
+        for place, gap, ids in gaps:
+            notes = {"zh": [], "en": []}
+            for fid in ids:
+                missing = by_id[fid].get("missing") or []
+                notes["zh"].append(f"{fid} 缺 {'、'.join(missing)}" if missing else fid)
+                notes["en"].append(f"{fid} missing {', '.join(missing)}" if missing else fid)
+            for lang, colon, open_, sep, close in (("zh", "：", "（", "；", "）"), ("en", ": ", " (", "; ", ")")):
+                where = f"{place[lang]}{colon}" if place[lang] else ""
+                note = f"{open_}{sep.join(notes[lang])}{close}" if ids else ""
+                writer.lines[lang].append(f"- {where}{gap[lang]}{note}")
+    if left:
+        writer.heading({lang: MASTER_HEADINGS[lang]["left_out"] for lang in RESUME_LANGS})
+        reasons = {}
+        for fid, reason in left.items():
+            reasons.setdefault(tuple(reason.values()), []).append(fid)
+        for (zh, en), ids in reasons.items():
+            writer.lines["zh"].append(f"- {', '.join(ids)}：{zh}")
+            writer.lines["en"].append(f"- {', '.join(ids)}: {en}")
+
+    covered = sorted(cited | set(left), key=lambda f: id_number(f, "f") or 0)
+    built_from = {"strategy": digest(strategy_guidance(folder)), "facts": {fid: digest(by_id[fid]) for fid in covered}}
+    for lang in RESUME_LANGS:
+        front = {"candidate": candidate_id(args.id), "lang": lang, "written": today(), "built_from": built_from}
+        paths[lang].write_text(f"---\n{hhyaml.dumps(front)}---\n\n{writer.body(lang)}\n", encoding="utf-8")
+        print(paths[lang])
+    print(f"{len(cited)} Facts cited, {len(left)} left out, {len(gaps)} gaps")
 
 
 def cmd_application_new(args):
@@ -4069,6 +4509,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id")
     p.add_argument("job")
     p.set_defaults(func=cmd_resume_pdf)
+
+    master = sub.add_parser("master", help="write the Candidate's Master resume: every usable Fact as one resume")
+    msub = master.add_subparsers(dest="action", required=True)
+    p = msub.add_parser("plan", help="show what the Master resume is written from, and whether it is current")
+    p.add_argument("id")
+    p.set_defaults(func=cmd_master_plan)
+    p = msub.add_parser("save", help="write master-resume.zh.md and master-resume.en.md from JSON or YAML on stdin")
+    p.add_argument("id")
+    p.add_argument("--file")
+    p.add_argument("--replace", action="store_true", help="write the Master resume again")
+    p.set_defaults(func=cmd_master_save)
 
     job = sub.add_parser("job", help="read Listings and Jobs, and save Job snapshots")
     jsub = job.add_subparsers(dest="action", required=True)
