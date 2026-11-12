@@ -24,21 +24,25 @@ _Avoid_: database of record
 
 **Source**:
 One raw input about a Candidate, such as a note, work log, photo, existing
-resume, GitHub repository, or the user's answers to follow-up questions, kept
-under `sources/` with an evidence level: documented, third-party, or
-self-reported. Identified by `s-<number>`.
+resume, GitHub repository, issue or pull request text, or the user's answers to
+follow-up questions, kept under `sources/` as received, never edited, with an
+evidence level: documented, third-party, or self-reported. Identified by
+`s-<number>`.
 _Avoid_: attachment, upload
 
 **Fact**:
-One statement about a Candidate's experience, skill, or achievement that cites
-the Source it came from. An inferred Fact is drawn from other Facts instead,
-and is usable in resumes only after the user confirms it. Identified by
-`f-<number>`.
+One claim about a Candidate's experience, project, achievement, skill,
+education, or certificate that cites the Source it came from. Implementation
+details that support a claim stay in the Source and are never Facts of their
+own. An inferred Fact is drawn from other Facts instead, and is usable in
+resumes only after the user confirms it. Identified by `f-<number>`.
 _Avoid_: claim, info, data point
 
 **Import report**:
-The result of importing one Source: Facts extracted, missing fields,
-conflicts, rejected content, proposed Tags, and follow-up questions.
+The result of importing one Source: the agent's analysis of it, including the
+arithmetic behind any converted number, Facts extracted, missing fields,
+conflicts, rejected content, proposed Tags, and follow-up questions. Everything
+the agent works out from a Source lives here, never in the Source.
 _Avoid_: import log, quality report
 
 **Tag**:
@@ -58,7 +62,9 @@ _Avoid_: dictionary, translation memory
 
 **Strategy**:
 The Candidate's current plan: which Roles to pursue and in what order,
-positioning, and what to strengthen. Updated from Feedback.
+positioning, what to strengthen, and the rules for writing resumes, including
+what to leave out. It comes before every Role profile and resume. Updated from
+Feedback.
 _Avoid_: plan, roadmap
 
 **Role**:
@@ -136,9 +142,11 @@ sourced Facts, each line citing the Facts it comes from.
 _Avoid_: CV variant, generated resume
 
 **Feedback**:
-One piece of input about how an Application went, from HR, an interviewer, the
-Candidate, or the user, with its cause: skill gap, experience, communication,
-salary, culture fit, or resume presentation.
+One piece of input about how an Application went, or about the Master resume,
+from HR, an interviewer, the Candidate, or the user, with its cause: skill gap,
+experience, communication, salary, culture fit, or resume presentation. The
+user's critique of a resume is Feedback, and the Strategy rule it leads to
+cites it.
 _Avoid_: comment, note
 
 **Fix direction**:

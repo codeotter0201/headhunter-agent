@@ -63,8 +63,9 @@ FACT_ORDER = (
     "derived_from", "reasoning", "missing", "state", "conflicts_with", "superseded_by",
 )
 REPORT_SECTIONS = (
-    "Facts extracted", "Missing fields", "Conflicts", "Rejected", "Proposed Tags", "Follow-up questions",
+    "Analysis", "Facts extracted", "Missing fields", "Conflicts", "Rejected", "Proposed Tags", "Follow-up questions",
 )
+MASTER_JOB = "master"  # the job argument of feedback add and update for Feedback on the Master resume
 READ_WITH = ("fetch", "browser", "pasted", "file")
 ROLE_STATES = ("active", "paused", "dropped")
 REQUIREMENT_KINDS = ("must", "nice")
@@ -292,6 +293,20 @@ def load_candidate(folder: Path) -> dict:
         "facts": read_list(folder / "facts.yml"),
         "glossary": read_yaml(folder / "glossary.yml", []),
     }
+
+
+def processed_sources(folder: Path) -> set:
+    """Source ids that have an Import report, or that an Import report names as the answer to a follow-up question."""
+    done = set()
+    for report in (folder / "imports").glob("*.md"):
+        match = re.search(r"-(s-\d+)\.md$", report.name)
+        if match:
+            done.add(match.group(1))
+        for line in report.read_text(encoding="utf-8").splitlines():
+            match = QUESTION_LINE.match(line)
+            if match and match.group(1) != " " and "answered in" in match.group(3):
+                done.update(re.findall(r"\bs-\d+\b", match.group(3).split("answered in", 1)[1]))
+    return done
 
 
 def report_questions(folder: Path) -> list:
@@ -635,6 +650,11 @@ def validate_candidate(folder: Path, known_tags: set) -> list:
     for qid, count in Counter(question_ids).items():
         if count > 1:
             err(f"follow-up question {qid} appears {count} times")
+    processed = processed_sources(folder)
+    for source in sources:
+        if isinstance(source, dict) and source.get("id") and source["id"] not in processed:
+            err(f"source {source['id']}: it has no Import report and answers no follow-up question; run import-report, "
+                "or mark the questions it answers as answered in it")
     for slug, path in role_dirs(folder):
         try:
             role = load_role(path)
@@ -666,6 +686,22 @@ def validate_candidate(folder: Path, known_tags: set) -> list:
             err(f"resume {jid}: {path.name} must be resume.zh.md or resume.en.md")
             continue
         errors.extend(f"{name}: {e}" for e in check_resume(path, lang, by_id))
+    for jid, path in application_dirs(folder):
+        written = [lang for lang in RESUME_LANGS if (path / f"resume.{lang}.md").exists()]
+        if written and len(written) < len(RESUME_LANGS):
+            err(f"resume {jid}: only resume.{written[0]}.md exists; write both with resume save --replace")
+        unprinted = [f"resume.{lang}.pdf" for lang in written if not (path / f"resume.{lang}.pdf").exists()]
+        if unprinted:
+            err(f"resume {jid}: {', '.join(unprinted)} missing; print them with resume pdf")
+    master_feedback = feedback_path(folder, MASTER_JOB)
+    if master_feedback.exists():
+        try:
+            front, _ = read_job(master_feedback)
+            if front.get("job") != MASTER_JOB:
+                err(f"{master_feedback.name}: job must be {MASTER_JOB}")
+            errors.extend(f"{name}: {e}" for e in check_feedback(front.get("entries"), MASTER_JOB, sources, known_tags))
+        except HHError as exc:
+            err(str(exc))
     masters = master_paths(folder)
     if any(path.exists() for path in masters.values()):
         question_ids = {q["id"] for q in report_questions(folder)}
@@ -804,6 +840,7 @@ def rebuild_index(root: Path) -> dict:
             con.executemany("INSERT INTO evaluation_gaps VALUES (?, ?, ?, ?)",
                             [(cid, jid, g.get("requirement"), g.get("kind")) for g in ev.get("gaps") or []])
             counts["evaluations"] += 1
+        jids = []
         for jid, path in application_dirs(folder):
             if not (path / "status.yml").exists():
                 continue
@@ -819,6 +856,8 @@ def rebuild_index(root: Path) -> dict:
                             [(cid, jid, e.get("stage"), e.get("round"), str(e.get("date")), e.get("note"))
                              for e in status.get("timeline") or []])
             counts["applications"] += 1
+            jids.append(jid)
+        for jid in jids + [MASTER_JOB]:
             for entry in load_feedback(folder, jid):
                 con.execute("INSERT INTO feedback VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
                     cid, jid, entry.get("id"), str(entry.get("date")), entry.get("from"), entry.get("content"),
@@ -845,7 +884,7 @@ def index_stale(root: Path) -> bool:
     paths = [root / "taxonomy.yml", root / "candidates", root / "jobs", *job_files(root)]
     for _, folder in candidate_dirs(root):
         paths += [folder, folder / "profile.yml", folder / "sources.yml", folder / "facts.yml", folder / "imports",
-                  folder / "glossary.yml", folder / "roles", folder / "applications"]
+                  folder / "glossary.yml", folder / "roles", folder / "applications", feedback_path(folder, MASTER_JOB)]
         paths += list((folder / "imports").glob("*.md"))
         for _, path in role_dirs(folder):
             paths += [path, path / "role.yml", path / "profile.md"]
@@ -897,6 +936,38 @@ def gh(args: list, raw: bool = False) -> Any:
     if raw:
         return result.stdout
     return json.loads(result.stdout) if result.stdout.strip() else None
+
+
+def github_items_text(repo: str, issues: list, pulls: list) -> tuple:
+    """Issues and pull requests as GitHub returns them: each one's text, its comments and, for a pull request, its
+    reviews, in order, without summarizing."""
+    info = gh([f"repos/{repo}"])
+    lines = [f"# GitHub issues and pull requests: {info['full_name']}", "",
+             f"- URL: {info['html_url']}", f"- Read: {today()} with gh", ""]
+    for label, numbers, want_pull in (("Issue", issues, False), ("Pull request", pulls, True)):
+        for number in numbers:
+            item = gh([f"repos/{repo}/issues/{number}"])
+            is_pull = "pull_request" in item
+            if is_pull != want_pull:
+                raise HHError(f"#{number} in {repo} is {'a pull request; use --pr' if is_pull else 'an issue; use --issue'}")
+            closed = f" · Closed: {str(item['closed_at'])[:10]}" if item.get("closed_at") else ""
+            lines += [f"## {label} #{number}: {item['title']}", "", f"- URL: {item['html_url']}",
+                      f"- Author: {item['user']['login']} · State: {item['state']} · Opened: {str(item['created_at'])[:10]}"
+                      + closed]
+            notes = gh([f"repos/{repo}/issues/{number}/comments?per_page=100"]) or []
+            if is_pull:
+                pull = gh([f"repos/{repo}/pulls/{number}"])
+                merged = str(pull.get("merged_at"))[:10] if pull.get("merged_at") else "no"
+                lines.append(f"- Merged: {merged} · Changed files: {pull.get('changed_files')} · "
+                             f"Additions: {pull.get('additions')} · Deletions: {pull.get('deletions')}")
+                reviews = gh([f"repos/{repo}/pulls/{number}/reviews?per_page=100"]) or []
+                notes += [r for r in reviews if str(r.get("body") or "").strip()]
+            lines += ["", "### Description", "", str(item.get("body") or "(empty)").strip(), ""]
+            for note in sorted(notes, key=lambda n: str(n.get("created_at") or n.get("submitted_at"))):
+                when = str(note.get("created_at") or note.get("submitted_at"))[:10]
+                kind = "Review" if "submitted_at" in note else "Comment"
+                lines += [f"### {kind} by {note['user']['login']}, {when}", "", str(note.get("body") or "").strip(), ""]
+    return info["html_url"], "\n".join(lines)
 
 
 def github_repo_snapshot(repo: str, author) -> tuple:
@@ -1274,6 +1345,8 @@ def role_stale(path: Path, role: dict, facts: list) -> list:
     reasons = []
     if built.get("role") != role_digest(role):
         reasons.append("role.yml changed")
+    if built.get("strategy") != digest(strategy_guidance(path.parent.parent)):
+        reasons.append("strategy.md changed")
     current = {f.get("id"): f for f in facts if isinstance(f, dict)}
     for fid, value in (built.get("facts") or {}).items():
         if fid not in current:
@@ -2064,8 +2137,13 @@ def stage_label(stage, number) -> str:
 # ---------------------------------------------------------------- feedback
 
 
+def feedback_path(folder: Path, jid: str) -> Path:
+    """Where the Feedback on an Application lives, or, for MASTER_JOB, the Feedback on the Master resume."""
+    return folder / "master-feedback.md" if jid == MASTER_JOB else folder / "applications" / jid / "feedback.md"
+
+
 def load_feedback(folder: Path, jid: str) -> list:
-    path = folder / "applications" / jid / "feedback.md"
+    path = feedback_path(folder, jid)
     if not path.exists():
         return []
     entries = read_job(path)[0].get("entries")
@@ -2095,6 +2173,8 @@ def check_feedback(entries, jid: str, sources: list, known_tags: set) -> list:
             errors.append(f"{where}: from must be one of {', '.join(FEEDBACK_FROM)}")
         if entry.get("cause") not in FEEDBACK_CAUSES:
             errors.append(f"{where}: cause must be one of {', '.join(FEEDBACK_CAUSES)}")
+        if jid == MASTER_JOB and entry.get("company_note"):
+            errors.append(f"{where}: Feedback on the Master resume is about no company; leave company_note out")
         if entry.get("state") not in FEEDBACK_STATES:
             errors.append(f"{where}: state must be one of {', '.join(FEEDBACK_STATES)}")
         for key, label in (("content", "the Feedback, quoted or summarized"), ("fix", "a concrete Fix direction")):
@@ -2123,16 +2203,19 @@ def write_feedback(root: Path, folder: Path, jid: str, entries: list) -> None:
     errors = check_feedback(entries, jid, read_list(folder / "sources.yml"), tag_ids(load_taxonomy(root)))
     if errors:
         raise HHError("nothing written:\n  " + "\n  ".join(errors))
-    job = read_job(root / "jobs" / f"{jid}.md")[0]
     ordered = [{key: entry[key] for key in FEEDBACK_ORDER if key in entry} for entry in entries]
-    lines = [f"# Feedback: {job.get('title')} · {job.get('company')}", ""]
+    if jid == MASTER_JOB:
+        lines = ["# Feedback: Master resume", ""]
+    else:
+        job = read_job(root / "jobs" / f"{jid}.md")[0]
+        lines = [f"# Feedback: {job.get('title')} · {job.get('company')}", ""]
     for entry in ordered:
         lines += [f"## {entry['id']} · {entry['date']} · {entry['from']} · {entry['cause'].replace('-', ' ')}", "",
                   str(entry["content"]), "", f"Fix direction ({entry['state']}): {entry['fix']}"]
         if entry.get("material"):
             lines.append(f"Material: {entry['material']}" + (f" ({', '.join(entry['sources'])})" if entry.get("sources") else ""))
         lines.append("")
-    path = folder / "applications" / jid / "feedback.md"
+    path = feedback_path(folder, jid)
     path.write_text(f"---\n{hhyaml.dumps({'job': jid, 'entries': ordered})}---\n\n" + "\n".join(lines).rstrip() + "\n",
                     encoding="utf-8")
 
@@ -2275,7 +2358,8 @@ def cmd_candidate_show(args):
     for slug, path in roles:
         role = load_role(path)
         stale = role_stale(path, role, facts)
-        status = "not built" if stale == ["not built yet"] else ("profile stale" if stale else "profile current")
+        status = ("not built" if stale == ["not built yet"] else
+                  f"profile stale: {'; '.join(stale)}" if stale else "profile current")
         print(f"  {slug}: {role.get('title')} (priority {role.get('priority')}, {role.get('state')}, {status})")
     evaluations = evaluation_files(folder)
     print(f"Evaluations: {len(evaluations)}")
@@ -2286,7 +2370,8 @@ def cmd_candidate_show(args):
               + (f"; resumes: {', '.join(written)}" if written else ""))
     statuses = [(jid, read_yaml(path / "status.yml", {})) for jid, path in application_dirs(folder)
                 if (path / "status.yml").exists()]
-    pending = [(jid, e) for jid, _ in application_dirs(folder) for e in load_feedback(folder, jid) if e.get("state") != "done"]
+    pending = [(jid, e) for jid in [jid for jid, _ in application_dirs(folder)] + [MASTER_JOB]
+               for e in load_feedback(folder, jid) if e.get("state") != "done"]
     print(f"Open Fix directions: {len(pending)}")
     for jid, entry in pending:
         print(f"  {jid} {entry.get('id')} ({entry.get('state')}, {entry.get('cause')}): {entry.get('fix')}")
@@ -2329,7 +2414,13 @@ def cmd_source_github(args):
     root = data_dir()
     folder = find_candidate(root, args.id, archived=False)
     target = re.sub(r"^https?://github\.com/", "", args.target.strip().rstrip("/"))
-    if "/" in target:
+    if args.issue or args.pr:
+        if "/" not in target:
+            raise HHError("--issue and --pr need a repository, owner/repo")
+        url, text = github_items_text(target, args.issue or [], args.pr or [])
+        numbers = [f"issue-{n}" for n in args.issue or []] + [f"pr-{n}" for n in args.pr or []]
+        filename = f"github-{target.replace('/', '-')}-{'-'.join(numbers)}"[:120] + ".md"
+    elif "/" in target:
         url, text = github_repo_snapshot(target, args.author)
         filename = f"github-{target.replace('/', '-')}.md"
     else:
@@ -2786,6 +2877,7 @@ def cmd_role_build(args):
         "built": today(),
         "built_from": {
             "role": role_digest(role),
+            "strategy": digest(strategy_guidance(folder)),
             "facts_through": make_id("f", max((id_number(f, "f") or 0 for f in by_id), default=0)),
             "facts": {fid: digest(by_id[fid]) for fid in sorted(referenced)},
         },
@@ -4017,10 +4109,18 @@ def cmd_application_sync(args):
           else "Every evaluated Application has a status.yml.")
 
 
+def feedback_target(folder: Path, jid: str) -> None:
+    """Check that the Application, or for MASTER_JOB the Master resume, the Feedback is about exists."""
+    if jid != MASTER_JOB:
+        load_status(folder, jid)
+    elif not master_paths(folder)["zh"].exists():
+        raise HHError(f"{folder.name} has no Master resume; write it with master save before logging Feedback on it")
+
+
 def cmd_feedback_add(args):
     root = data_dir()
     folder = find_candidate(root, args.id, archived=False)
-    load_status(folder, args.job)
+    feedback_target(folder, args.job)
     payload = read_payload(args)
     items = payload if isinstance(payload, list) else [payload]
     entries = load_feedback(folder, args.job)
@@ -4045,7 +4145,7 @@ def cmd_feedback_add(args):
 def cmd_feedback_update(args):
     root = data_dir()
     folder = find_candidate(root, args.id, archived=False)
-    load_status(folder, args.job)
+    feedback_target(folder, args.job)
     patch = read_payload(args)
     if not isinstance(patch, dict):
         raise HHError("the update must be a mapping of fields")
@@ -4070,7 +4170,7 @@ def cmd_feedback_list(args):
     con = open_index(root)
     sql = ("SELECT f.candidate_id, c.name, f.job_id, f.id, f.date, f.source, f.cause, f.state, f.fix, f.material, a.company "
            "FROM feedback f JOIN candidates c ON c.id = f.candidate_id "
-           "JOIN applications a ON a.candidate_id = f.candidate_id AND a.job_id = f.job_id WHERE 1 = 1")
+           "LEFT JOIN applications a ON a.candidate_id = f.candidate_id AND a.job_id = f.job_id WHERE 1 = 1")
     params: list = []
     filters = (("f.job_id = ?", args.job), ("a.role LIKE ?", f"%{args.role}%" if args.role else None),
                ("a.company LIKE ?", f"%{args.company}%" if args.company else None), ("f.cause = ?", args.cause),
@@ -4083,7 +4183,8 @@ def cmd_feedback_list(args):
     rows = con.execute(sql + " ORDER BY f.candidate_id, f.date, f.job_id, f.id", params).fetchall()
     for cid, name, jid, fid, date, origin, cause, state, fix, material, company in rows:
         extra = f"; material: {material}" if material else ""
-        print(f"{cid} {name}  {jid} {fid}  {date}  {origin}  {cause}  [{state}] {fix}{extra}  · {company or '?'}")
+        about = "Master resume" if jid == MASTER_JOB else company or "?"
+        print(f"{cid} {name}  {jid} {fid}  {date}  {origin}  {cause}  [{state}] {fix}{extra}  · {about}")
     print("No Feedback." if not rows else "1 piece of Feedback" if len(rows) == 1 else f"{len(rows)} pieces of Feedback")
 
 
@@ -4366,6 +4467,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id")
     p.add_argument("target")
     p.add_argument("--author", help="count only this login's commits")
+    p.add_argument("--issue", type=int, action="append", help="save this issue's text and comments instead; repeatable")
+    p.add_argument("--pr", type=int, action="append",
+                   help="save this pull request's text, comments and reviews instead; repeatable")
     p.set_defaults(func=cmd_source_github)
     p = ssub.add_parser("state", help="record how readable a Source was")
     p.add_argument("id")
@@ -4510,14 +4614,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     fb = sub.add_parser("feedback", help="log Feedback, find what recurs, keep Company notes and calibrate the rubric")
     bsub = fb.add_subparsers(dest="action", required=True)
-    p = bsub.add_parser("add", help="add Feedback to an Application from JSON or YAML on stdin")
+    p = bsub.add_parser("add", help="add Feedback to an Application, or to the Master resume, from JSON or YAML on stdin")
     p.add_argument("id")
-    p.add_argument("job")
+    p.add_argument("job", help=f"the Application's Job id, or {MASTER_JOB} for the Master resume")
     p.add_argument("--file")
     p.set_defaults(func=cmd_feedback_add)
     p = bsub.add_parser("update", help="merge fields into one piece of Feedback; a null value removes the field")
     p.add_argument("id")
-    p.add_argument("job")
+    p.add_argument("job", help=f"the Application's Job id, or {MASTER_JOB} for the Master resume")
     p.add_argument("entry")
     p.add_argument("--file")
     p.set_defaults(func=cmd_feedback_update)

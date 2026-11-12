@@ -29,6 +29,7 @@ python3 <skill folder>/scripts/hh.py <command>
 | `candidate archive <id>` / `candidate restore <id>` | Move a Candidate to `archive/` and back |
 | `source add <id> <file or -> --type <type> [--origin] [--evidence] [--state]` | Copy a file, or stdin with `-`, into `sources/` and register it |
 | `source github <id> <owner/repo or user> [--author <login>]` | Save a README, language and commit snapshot of a repository or profile with `gh` |
+| `source github <id> <owner/repo> --issue N --pr N` | Save the text of issues and pull requests with their comments and reviews, as GitHub returns them, with `gh`; `--issue` and `--pr` repeat |
 | `source state <id> <source> <state>` | Record how readable a Source was |
 | `extract-text <file>` | Print the text of a Word, text or PDF file |
 | `import-report <id> <source>` | Create the Import report for a Source |
@@ -56,7 +57,7 @@ python3 <skill folder>/scripts/hh.py <command>
 | `application overdue` | List open Applications past their due date, across all Candidates |
 | `application progress [--by candidate\|role\|job\|company]` | Count Applications per Stage, with overdue follow-ups and outcomes |
 | `application sync` | Create `status.yml` for evaluated Applications that have none |
-| `feedback add <id> <job>` / `feedback update <id> <job> <entry>` | Add Feedback to an Application, or merge fields into one piece, from JSON or YAML on stdin; ids are filled in, and nothing is written if any check fails |
+| `feedback add <id> <job>` / `feedback update <id> <job> <entry>` | Add Feedback to an Application, or with `master` in place of the Job id to the Master resume, or merge fields into one piece, from JSON or YAML on stdin; ids are filled in, and nothing is written if any check fails |
 | `feedback list [<id>] [--job] [--role] [--company] [--cause] [--state] [--from]` | List Feedback and its Fix directions |
 | `feedback patterns [<id>]` | Find causes that recur across a Candidate's Applications and what they suggest changing |
 | `feedback companies` | Rewrite the Feedback section of every Company notes file |
@@ -66,7 +67,7 @@ python3 <skill folder>/scripts/hh.py <command>
 | `resume pdf <id> <job>` | Check both resumes and print them to PDF again, after editing them by hand |
 | `master plan <id>` | Show what the Master resume is written from: the Candidate's Strategy, every usable Fact by organization and kind with its missing fields and the lines of `strategy.md` that name it, the open follow-up questions, the Glossary and the header, and whether the Master resume is current |
 | `master save <id> [--replace]` | Write `master-resume.zh.md` and `master-resume.en.md` from JSON or YAML on stdin; nothing is written if any check fails |
-| `validate [<id>]` | Check `taxonomy.yml`, Candidate folders (with their Roles, Evaluations, resumes, Applications and Feedback) and Job snapshots |
+| `validate [<id>]` | Check `taxonomy.yml`, Candidate folders (with their Sources, Roles, Evaluations, resumes, Applications and Feedback) and Job snapshots |
 | `index` | Delete and rebuild `index.sqlite` |
 | `search candidates` / `search facts` | Filter the Index (see Search) |
 | `query "<SELECT ...>"` | Run a read-only SQL query on the Index |
@@ -82,13 +83,14 @@ Searches rebuild the Index first when any file changed. Run `validate` after edi
   candidates/c-<number>-<slug>/
     profile.yml                    basics, salary, location, status
     sources.yml                    one entry per Source
-    sources/                       raw inputs; file names start with the Source id
+    sources/                       raw inputs, stored as received; file names start with the Source id
     facts.yml                      one entry per Fact
-    imports/                       Import reports, including unanswered follow-up questions
+    imports/                       Import reports: analysis, extracted Facts and follow-up questions
     glossary.yml                   Chinese ↔ English names for companies, titles, schools, terms
-    strategy.md                    job-search strategy; its Roles section is kept by the script
+    strategy.md                    job-search strategy and resume rules; its Roles section is kept by the script
     master-resume.zh.md            Master resume in Chinese: every usable Fact, citing them; never sent, no PDF
     master-resume.en.md            the same in English
+    master-feedback.md             Feedback on the Master resume and its Fix directions
     roles/<role-slug>/
       role.yml                     Role: title, level, industries, priority, state, requirements
       profile.md                   Role profile: positioning, evidence, gaps
@@ -109,6 +111,25 @@ Within a Job, requirements are referred to by position, `must-1`, `nice-1`, and 
 
 A Job id comes from its URL: `j-104-<job code>`, `j-cakeresume-<company>-<job slug>`, `j-yourator-<number>`, `j-linkedin-<number>`. A page on any other site uses its host name and a hash of its URL, such as `j-jobs-lever-co-91b1946a`. A Job the user gave without a link uses a hash of its company and title, such as `j-user-3f9a1c2e`.
 
+## Where information lives
+
+Each kind of information about a Candidate has one home. Everything else refers to it by id and never copies it. When a lower layer contradicts a higher one, rebuild the lower layer instead of patching it.
+
+| Information | Home | Written by |
+|---|---|---|
+| Raw input: files, pasted text, answers, and the repository material you read (issue and pull request text, commit records, files) | `sources/` and `sources.yml`, stored as received and never edited afterwards | `source add`, `source github` |
+| What you work out from one Source: analysis and summaries, the arithmetic behind a converted number, extracted Facts, the quality check, conflicts, rejected content, proposed Tags, follow-up questions | That Source's Import report | `import-report`, then your edits |
+| Claims about the Candidate | `facts.yml`, each Fact citing a raw Source with `at` | `fact add`, `fact update` |
+| Rules for writing resumes, what to leave out, viewpoints | `strategy.md`, each rule citing the Feedback or Source it came from | You, once the user agrees |
+| The user's critique of a resume | The Application's `feedback.md`, or `master-feedback.md` for the Master resume | `feedback add` |
+| Which Facts lead for a Role, and in which order | The Role profile, following the Strategy | `role build` |
+| Every Fact worded as a resume | The Master resume | `master save` |
+| The wording for one Job | The Tailored resume pair | `resume save` |
+
+Precedence: the Strategy, then the Role profile, then the Master resume, then the Tailored resume. Facts and Sources are the evidence for every layer and never change because of one.
+
+Record decisions about a Candidate only in these files, never only in your own memory or another tool-specific store, so that every session reads the same rules whatever agent runs it.
+
 ## File formats
 
 YAML files use a plain subset: block mappings and lists, one-line `[...]` and `{...}`, quoted or plain values, `|` and `>` blocks, and comments. Quote any value that contains `: ` or starts with a symbol. Anchors, tags and plain values spread over several lines are rejected.
@@ -125,7 +146,7 @@ YAML files use a plain subset: block mappings and lists, one-line `[...]` and `{
 | `received` | Date imported |
 | `evidence` | documented (certificates, offer letters, official records), third-party (GitHub, references, published work) or self-reported (the Candidate's own notes, resume or answers) |
 | `state` | read, partly-readable or unreadable |
-| `file` | Path of the raw input under `sources/` |
+| `file` | Path of the raw input under `sources/`, stored as received and never edited |
 
 **facts.yml**: one entry per Fact.
 
@@ -143,7 +164,9 @@ YAML files use a plain subset: block mappings and lists, one-line `[...]` and `{
   state: active              # active | conflict | superseded
 ```
 
-- `at` says where in the Source: a page, line, section, heading, timestamp, or follow-up question id.
+- A Fact is one claim about experience, a project, an achievement, a skill, education or a certificate. Implementation details that support a claim, such as field names, error codes, rule lists and small bug lists, stay in the Source and are reached through `at`; they are never Facts of their own.
+- `at` says where in the Source: a page, line, section, heading, timestamp, issue or pull request such as `Pull request #12`, or follow-up question id.
+- A number converted from the Source, such as a ratio written as a percentage, may appear in a statement only when the Analysis section of the Source's Import report shows the arithmetic and names the Fact.
 - An inferred Fact has `derived_from` (Fact ids) and `reasoning`, no `sources` and no `evidence`.
 - A Fact in `conflict` lists `conflicts_with`; a `superseded` Fact names `superseded_by`.
 - `experience` Facts with a `period` give the Candidate's years of experience.
@@ -152,7 +175,7 @@ YAML files use a plain subset: block mappings and lists, one-line `[...]` and `{
 
 **glossary.yml**: entries `{zh, en, kind}`, where `kind` is company, title, school or term. Each name has exactly one pair.
 
-**Import report** (`imports/<date>-<source>.md`): sections Facts extracted, Missing fields, Conflicts, Rejected, Proposed Tags and Follow-up questions. Questions are checklist lines, `- [ ] q-004: <question>`; an answered one becomes `- [x] q-004: <question> — answered in s-007`.
+**Import report** (`imports/<date>-<source>.md`): sections Analysis, Facts extracted, Missing fields, Conflicts, Rejected, Proposed Tags and Follow-up questions. Analysis holds what you work out from the Source: summaries, timelines, and the arithmetic of each converted number with the Fact that states it. Questions are checklist lines, `- [ ] q-004: <question>`; an answered one becomes `- [x] q-004: <question> — answered in s-007`. A Source that answers follow-up questions needs no Import report of its own once the questions name it this way.
 
 **Job snapshot** (`jobs/<job-id>.md`): a YAML block between `---` lines, then the title, a summary line and `## Posting text` with the posting as read.
 
@@ -216,7 +239,7 @@ requirements:
 | `to-confirm` | Only inferred Facts support it; they are listed |
 | `weak-evidence` | Only self-reported Facts support it |
 
-A profile is stale when `role.yml` changed since it was built, a Fact it cites changed or was removed, or a newer active Fact shares a Tag with its requirements.
+A profile is stale when `role.yml` or the Strategy's guidance (`strategy.md` without its Roles section) changed since it was built, a Fact it cites changed or was removed, or a newer active Fact shares a Tag with its requirements.
 
 **evaluation.md**: a YAML block between `---` lines, then the Evaluation in readable form, written by `evaluation save` from what you give it:
 
@@ -355,7 +378,7 @@ timeline:                       # one entry per Stage change, oldest first
 
 A closed Application has `outcome` (hired, declined, rejected or withdrawn) on the Application and its last timeline entry, and no `next_step` or `due`. `role` matches the Application's Evaluation.
 
-**feedback.md**: a YAML block between `---` lines with `job` and `entries`, then the Feedback in readable form, written by the script.
+**feedback.md / master-feedback.md**: a YAML block between `---` lines with `job` (the Job id, or `master` for Feedback on the Master resume) and `entries`, then the Feedback in readable form, written by the script. Feedback on the Master resume has no `company_note`.
 
 ```yaml
 - id: fb-001                     # filled in; numbered within the Application
@@ -396,10 +419,10 @@ Run `candidate new`. Fill in the basics the user gives in `profile.yml`, then `v
 
 Import never asks for or depends on a target Role.
 
-1. **Keep the raw input**: `source add` for a file or pasted text (`-` reads stdin), or `source github` for a repository or profile. Keep it even when it turns out unreadable.
+1. **Keep the raw input**: `source add` for a file or pasted text (`-` reads stdin), or `source github` for a repository or profile. For the story behind repository work, save the material itself: `source github <id> <owner/repo> --issue N --pr N` for issue and pull request text, and `git log` output through `source add <id> - --type github --origin <repository URL>` for commit records. Keep a Source even when it turns out unreadable, and never edit it after saving: what you work out from it goes into its Import report.
 2. **Read it**: text directly; Word with `extract-text`; PDF with your own file reading, or `extract-text` when `pdftotext` is installed; photos only if you can see images. Anything else is type `other`, read as text where possible. Record `partly-readable` or `unreadable` with `source state`, tell the user, and never guess what you could not read.
 3. **Start the report**: `import-report <id> <source>`.
-4. **Extract Facts**: one claim per Fact, in the language of the Source, with numbers, titles and dates exactly as written. Cite where each came from with `at`.
+4. **Analyze and extract Facts**: write what you work out from the Source, such as a summary of a repository's issues and pull requests or a timeline, under Analysis in the report. Then extract one claim per Fact, in the language of the Source, with numbers, titles and dates exactly as written, and cite where each came from with `at`. Implementation details stay in the Source; a converted number needs its arithmetic under Analysis.
 5. **Check quality** of every Fact and record the result in the report:
 
    | Dimension | Check |
@@ -419,7 +442,7 @@ Import never asks for or depends on a target Role.
 
 ### Follow-up questions
 
-When you start working with a Candidate, run `questions <id>` and offer the open ones again, run `role stale <id>` to offer rebuilding out-of-date Role profiles, and offer to write the Master resume again when `candidate show <id>` reports it stale. Save the user's answers as a Source with `source add <id> - --type interview`, cite them with `at: q-<number>`, mark the questions answered in their report, and add or update Facts.
+When you start working with a Candidate, run `questions <id>` and offer the open ones again, run `role stale <id>` to offer rebuilding out-of-date Role profiles, and offer to write the Master resume again when `candidate show <id>` reports it stale. Save the user's answers as a Source with `source add <id> - --type interview`, cite them with `at: q-<number>`, mark the questions answered in their report as `— answered in s-<number>`, and add or update Facts. When the user critiques a resume instead of answering, log it as Feedback (see Log Feedback), not as a Source.
 
 ### Inferred Facts
 
@@ -442,10 +465,10 @@ A Candidate can pursue several Roles at once. Roles never change Facts, Sources 
 1. **Define**: from the user's description, write the title, level, industries and requirements, and pipe them to `role new <id>`. Mark each requirement's origin: `user` when the user said so, `assumed` when it comes from your general knowledge of the Role (tell the user these are assumptions), `job` when it comes from saved Jobs (list their ids). Add the title to `glossary.yml` first, as a title with both languages.
 2. **Match**: `role match <id> <role>` lists the Facts that share a Tag with each requirement. Judge which actually support it; other Facts may support it too.
 3. **Build**: pipe the profile to `role build <id> <role>`:
-   - `positioning`: a headline and short summary for this Role, using only what the listed Facts say.
+   - `positioning`: a headline and short summary for this Role, using only what the listed Facts say. It follows the Strategy: lead with what the Strategy puts first and keep what it plays down out of the lead.
    - `evidence`: for each requirement, the active, sourced Facts that support it, each with why.
    - `gaps`: for each requirement without documented or third-party evidence, how to close it; list inferred Facts under its gap to confirm. The script works out the gap kind and refuses a profile that leaves any requirement unaccounted for.
-4. **Keep current**: after imports or conflict decisions, `role stale` names the profiles to rebuild and why. Rebuilding never changes `role.yml`; change requirements only with the user, through `role update` or `role refine` (see Evaluate Jobs).
+4. **Keep current**: after imports, conflict decisions or a change to the Strategy, `role stale` names the profiles to rebuild and why. Rebuilding never changes `role.yml`; change requirements only with the user, through `role update` or `role refine` (see Evaluate Jobs).
 5. **Strategy**: priorities and states live in `role.yml` and appear in the Roles section of `strategy.md`. Drop a Role with `role update <id> <role>` and `{"state": "dropped"}`; its folder stays.
 
 ### Evaluate Jobs
@@ -475,7 +498,7 @@ The Master resume writes out every usable Fact of a Candidate as one complete re
    - Wording may add context, the judgment behind an action and the impact a Fact states, but never raises a role ("took part in" never becomes "led") and never adds a number, title, date or skill. Follow the Strategy's resume guidance.
 3. **Mark gaps**: where a line lacks something, such as a result, a team size, a company's context or a date, find the open follow-up question that asks for it, or add one to the Import report of the Source the Fact cites, with an id from `next-id <id> question`. Set `gap` to that question's id. Where no Fact can fill a line yet, give the item only a `gap`.
 4. **Save**: pipe it to `master save <id>`; `--replace` writes it again.
-5. **Follow up**: ask the questions the gaps name and save the answers as in Follow-up questions. The new Facts make the Master resume stale, so offer to write it again.
+5. **Follow up**: ask the questions the gaps name and save the answers as in Follow-up questions. The new Facts make the Master resume stale, so offer to write it again. When the user critiques the Master resume, log it with `feedback add <id> master` (see Log Feedback).
 6. **Report** the two files, how many Facts it cites and leaves out, and its gaps.
 
 ### Write resumes
@@ -484,8 +507,12 @@ Write a Chinese and an English resume for an Application worth pursuing, after i
 
 1. **Check**: when the user decides to apply, move the Application to preparing (see Track Applications). It needs an Evaluation made under a Role, and that Role's profile must be current; `resume plan` says which is missing. An Evaluation without a Role needs a Role created from the Job first (Evaluate Jobs, step 7). Add any company, title, school or location still missing from `glossary.yml`, and `contact` and `name_en` to `profile.yml` if the user gives them.
 2. **Plan**: `resume plan <id> <job>` shows the Candidate's Strategy without its Roles section, the Role profile's positioning and the order of its evidence, the Facts the Evaluation cites for each Job requirement, what to leave out, every usable Fact by kind, and the Glossary.
-3. **Write**: start from the positioning and the evidence order, then reorder and rewrite the Facts for this Job: the most relevant first, the Job's wording where the Facts support it. Write each line in both languages, one claim per line, with the Facts it comes from. Use only what the cited Facts say: no new numbers, titles, dates or skills. Requirements the Candidate lacks stay in the Evaluation as gaps. Follow the Strategy's resume guidance, such as which title to use or which experience to leave out. Viewpoints in the Strategy may shape the wording of the summary and positioning, but never replace sourced Facts: every claim still cites its Facts.
-4. **Save**: pipe the resume to `resume save <id> <job>`; it writes both Markdown files and PDFs. Use `--replace` to write them again.
+3. **Write**: the Strategy comes first. Its resume guidance wins over the Role profile's positioning; when they disagree, rebuild the Role profile before writing. Start from the positioning and the evidence order, then reorder and rewrite the Facts for this Job, the most relevant first. Write each line in both languages, with the Facts it comes from.
+   - A bullet may tell one story about one event: the problem, the judgment or trade-off, the action and the result, every part citing its Facts. It never joins Facts from different events to cover more requirements.
+   - The Job's wording may only rename what that event's Facts say.
+   - Use only what the cited Facts say: no new numbers, titles, dates or skills. Requirements the Candidate lacks stay in the Evaluation as gaps.
+   - Follow the Strategy's resume guidance, such as which title to use or which experience to leave out. Viewpoints in the Strategy may shape the wording of the summary and positioning, but never replace sourced Facts: every claim still cites its Facts.
+4. **Save**: pipe the resume to `resume save <id> <job>`; it writes both Markdown files and PDFs. Use `--replace` to write them again. Resumes are written only this way; `validate` reports an Application whose resume exists in one language only or has no PDF.
 5. **Hand edits**: after the user edits a Markdown file, run `resume pdf <id> <job>`.
 6. **Report** the four files, and remind the user that the resumes leave out the gaps listed in the Evaluation.
 
@@ -511,7 +538,8 @@ An Application is one Candidate × Job pair. When you start working with the use
 
 ### Log Feedback
 
-1. **Log**: when the user reports how an Application went, pipe each piece to `feedback add <id> <job>`, one cause and one Fix direction per piece. Quote or summarize it, and let the user confirm the cause. Set `from` to who said it, and `from: user` for the user's own judgment. Add `tags` when it names a skill or topic, so repeats can be found. An Application must exist first.
+1. **Log**: when the user reports how an Application went, pipe each piece to `feedback add <id> <job>`, one cause and one Fix direction per piece. Quote or summarize it, and let the user confirm the cause. Set `from` to who said it, and `from: user` for the user's own judgment. Add `tags` when it names a skill or topic, so repeats can be found. The Application, or for `master` the Master resume, must exist first.
+   - **Critiques of a resume**: when the user critiques a Tailored resume, log each point with `from: user` and cause `resume-presentation`, and make its Fix direction the Strategy change it calls for, such as "Lead with the platform work". Critiques of the Master resume go to `feedback add <id> master`. Once the user agrees, edit `strategy.md` and cite the entry in the rule, such as `(feedback j-yourator-39119 fb-002)` or `(feedback master fb-001)`, then mark the entry done. Never keep these rules only in your own memory.
 2. **Company notes**: when the Feedback says something about the company rather than the Candidate, such as its interview format or what it screens for, add a `company_note`: one sentence, in general terms, naming no one. The script adds it to the company's notes.
 3. **Follow through**: `candidate show` lists open Fix directions. Change their state with `feedback update <id> <job> <entry>` and `{"state": "in-progress"}`. When a Fix direction will produce new material, such as a portfolio piece, set `material`. It can only be done once the material is imported: run Import a Source, then update with `{"state": "done", "sources": ["s-008"]}`. New Facts mark the affected Role profiles stale, so offer to rebuild them.
 4. **Patterns**: when `feedback add` reports a recurring cause, or the user asks what keeps going wrong, run `feedback patterns [<id>]`. It finds causes in two or more of a Candidate's Applications with a Fix direction still to finish, the topics they share, and the Roles with the cause in two or more Applications. It suggests what each cause means for the Strategy, those Role profiles and open Applications' resumes. Turn that into specific proposals, and make only the changes the user accepts: edit `strategy.md`, `role build`, or `resume save --replace`.
@@ -567,3 +595,4 @@ The script names itself in its User-Agent and follows robots.txt. When a site re
 10. **Read job sites politely.** Follow robots.txt, identify the script honestly, and never work around a refusal or bot check.
 11. **Two resumes per job.** Write a Chinese and an English version; use `glossary.yml` so names are translated the same way every time.
 12. **Feedback proposes, the user decides.** Changes to a Strategy, Role profile, resume or the rubric that come from Feedback wait for the user's agreement.
+13. **One home for each kind of information.** Sources stay as received, your analysis goes into Import reports, resume rules into the Strategy, and critiques into Feedback (see Where information lives). Never keep a decision about a Candidate only in your own memory.
