@@ -64,7 +64,7 @@ python3 <skill folder>/scripts/hh.py <command>
 | `resume plan <id> <job>` | Show what an Application's resumes start from: the Candidate's Strategy, the Role profile, the Evaluation's evidence, what to leave out, the usable Facts and the Glossary |
 | `resume save <id> <job> [--replace]` | Write `resume.zh.md` and `resume.en.md` from JSON or YAML on stdin and print both to PDF; nothing is written if any check fails |
 | `resume pdf <id> <job>` | Check both resumes and print them to PDF again, after editing them by hand |
-| `master plan <id>` | Show what the Master resume is written from: the Candidate's Strategy, every usable Fact by organization and kind with its missing fields, the Glossary and the header, and whether the Master resume is current |
+| `master plan <id>` | Show what the Master resume is written from: the Candidate's Strategy, every usable Fact by organization and kind with its missing fields and the lines of `strategy.md` that name it, the open follow-up questions, the Glossary and the header, and whether the Master resume is current |
 | `master save <id> [--replace]` | Write `master-resume.zh.md` and `master-resume.en.md` from JSON or YAML on stdin; nothing is written if any check fails |
 | `validate [<id>]` | Check `taxonomy.yml`, Candidate folders (with their Roles, Evaluations, resumes, Applications and Feedback) and Job snapshots |
 | `index` | Delete and rebuild `index.sqlite` |
@@ -265,7 +265,7 @@ summary:                          # one or more sentences, not tied to a Role
   - {zh: ..., en: ..., facts: [f-004, f-001]}
 skills:                           # grouped; where each was used, with years only from Fact periods
   - {label: {zh: 程式語言, en: Languages}, zh: Python、SQL（2020 起）, en: "Python, SQL (since 2020)", facts: [f-011]}
-highlights:                       # the 3–5 strongest results; their Facts are cited in experience or projects too
+highlights:                       # optional, only when the Strategy asks for it; Facts also cited in experience or projects
   - {zh: ..., en: ..., facts: [f-002, f-003]}
 experience:                       # reverse chronological
   - org: 智慧水表專案              # a company in glossary.yml, cited by one of its Facts; or name: {zh, en}
@@ -275,7 +275,7 @@ experience:                       # reverse chronological
     roles:                        # optional: one line per title, such as titles at several companies
       - {org: 乙科技, title: 資料工程師, period: 2021-07..2022-02, facts: [f-005]}
     context: {zh: ..., en: ..., facts: [f-006]}            # what the organization or project is
-    scope: {gap: {zh: 團隊人數, en: team size}, facts: [f-004]}   # team size, ownership, reporting line
+    scope: {gap: q-004, facts: [f-004]}                  # team size, ownership, reporting line
     groups:                       # achievements by project or theme, most impactful first
       - heading: {zh: 資料匯入, en: Data import}             # optional
         bullets: [{zh: ..., en: ..., facts: [f-007]}]
@@ -285,12 +285,12 @@ education: [{school: 範例大學, zh: 資訊管理學士, en: B.S. in Informati
 certificates: [{zh: ..., en: ..., facts: [f-015]}]         # certificates and training
 awards: []                        # awards, publications, talks, patents
 languages: [{zh: 英文：TOEIC 850（2019）, en: "English: TOEIC 850 (2019)", facts: [f-013]}]
-left_out: [{facts: [f-010], zh: 依 Strategy 不放這段經歷, en: The Strategy leaves this role out}]
+left_out: [f-010]                 # Facts that a rule in strategy.md names and leaves out
 ```
 
 - `org` is a company in `glossary.yml`; a self-directed stretch, such as independent development or study, takes `name` instead. `school` and `period` are optional in `education`.
-- Any item may add `gap: {zh, en}`: what is missing there, such as a result or a team size. The line shows it as `【待補：…】` or `[To fill: …]`. An item with only a gap, and optionally its Facts, stands for a line no Fact can fill yet.
-- Sections appear in the order above, after the header the script writes from `profile.yml`; a section with no items is left out. Two appendices follow, not part of the resume: Gaps (待補) lists every gap with its Facts' `missing` fields, and Left out (未寫入) lists `left_out` with its reasons.
+- Any item may add `gap: q-<number>`: the follow-up question, in an Import report, that asks for what is missing there, such as a result or a team size. The line shows it as `【待補：q-004】` or `[To fill: q-004]`. An item with only a gap, and optionally its Facts, stands for a line no Fact can fill yet.
+- Sections appear in the order above, after the header the script writes from `profile.yml`; a section with no items is left out. Two appendices follow, not part of the resume: Gaps (待補) lists every gap with its question id and its Facts' `missing` fields, without repeating the question, and Left out (未寫入) lists each `left_out` Fact with the lines of `strategy.md` that name it.
 - Every line other than headings and gap-only lines ends with the Facts it comes from, as in Tailored resumes.
 
 `master save` refuses a Master resume when:
@@ -299,11 +299,12 @@ left_out: [{facts: [f-010], zh: 依 Strategy 不放這段經歷, en: The Strateg
 - a number in a line is not in the statements or periods of the Facts it cites
 - a company, title, school or location is not in `glossary.yml`, an `org` is not the organization of one of its Facts, a title or school is not in its Facts, or a period is not one of its Facts'
 - the Chinese and English lines name a Glossary entry differently, or the English has Chinese in it
-- an active, sourced Fact is neither cited nor listed under `left_out`, or `left_out` lists a cited or unusable Fact
+- an active, sourced Fact is neither cited nor listed under `left_out`, or `left_out` lists a cited or unusable Fact, or a Fact that no line of `strategy.md` outside its Roles section names
+- a `gap` is not the id of a follow-up question in the Candidate's Import reports
 - a highlight cites a Fact that no `experience` or `projects` line cites
 - the headline or summary is missing
 
-The Master resume is stale when a Fact it covers changed or was removed, an active, sourced Fact is not covered, or the Strategy's guidance changed; `candidate show` and `master plan` say which. `validate` checks the Markdown after hand edits as it checks Tailored resumes; lines that hold only a gap need no Facts, and the appendices only need to name known Facts. The Master resume has no PDF.
+The Master resume is stale when a Fact it covers changed or was removed, an active, sourced Fact is not covered, or the Strategy's guidance changed; `candidate show` and `master plan` say which. `validate` checks the Markdown after hand edits as it checks Tailored resumes; lines that hold only a gap need no Facts, every gap marker must name a follow-up question in the Import reports, and the appendices only need to name known Facts. The Master resume has no PDF.
 
 **resume.zh.md / resume.en.md**: a YAML block between `---` lines (`candidate`, `job`, `role`, `lang`, `written`, and `role_profile`, the build date of the Role profile it started from), then the resume, written by `resume save` from what you give it:
 
@@ -462,19 +463,19 @@ Each Evaluation compares one Job snapshot with one Candidate under the Role that
 
 ### Write the Master resume
 
-The Master resume writes out every usable Fact of a Candidate as one complete resume, in Chinese and English. It is internal: the user reads it to review and confirm the Facts, and extracts for specific contexts start from it. It is never sent. Write it when the user asks, and again when it is stale.
+The Master resume writes out every usable Fact of a Candidate as one complete resume, in Chinese and English. It is internal: the user reads it to review and confirm the Facts, and extracts for specific contexts start from it. It is never sent. Write it when the user asks, and again when it is stale. It is written only through `master save`; a resume-like file written any other way, such as a hand-written draft, is not a Master resume and no command reads it. To replace such a draft, write the Master resume with `master save`, move the rules in the draft into `strategy.md` and its open questions into Import reports as follow-up questions, and remove the draft only when the user agrees.
 
-1. **Plan**: `master plan <id>` shows the Candidate's Strategy without its Roles section, every usable Fact grouped by organization, newest first, and by kind, with its period, evidence and missing fields, the Facts never to use, the Glossary and the header. Add any company, title, school or location still missing from `glossary.yml`.
-2. **Write** every usable Fact into a section, or list it under `left_out` with the reason, such as the Strategy leaving that experience out.
+1. **Plan**: `master plan <id>` shows the Candidate's Strategy without its Roles section, every usable Fact grouped by organization, newest first, and by kind, with its period, evidence, missing fields and the lines of `strategy.md` that name it, the Facts never to use, the open follow-up questions, the Glossary and the header. Add any company, title, school or location still missing from `glossary.yml`.
+2. **Write** every usable Fact into a section, or list it under `left_out` when a rule in `strategy.md` leaves it out. The rule names the Fact, so the decision lives only in the Strategy. To leave out a Fact that no rule names, propose a rule to the user and add it to `strategy.md` once they agree. The Strategy decides order and emphasis: what the summary leads with, which achievements come first, and whether Highlights appear.
    - **Summary**: a headline and a few sentences, not tied to a Role: years and fields, signature strengths, representative results, background. Viewpoints in the Strategy may shape its wording, but every sentence cites Facts.
-   - **Skills** in groups, each naming where it was used. **Highlights**: the 3–5 strongest results across organizations.
+   - **Skills** in groups, each naming where it was used. **Highlights** only when the Strategy asks for them: the strongest results across organizations, each also written in full under its experience or project.
    - **Experience**, newest first: one block per organization, a self-directed stretch such as independent development or study (`name`), or one project with titles at several companies (`roles`, one line per title, as a promotion within one company is shown). Each block has a context line (what the organization or project is), a scope line (team size, ownership, reporting line), achievements grouped under headings by project or theme with the most impactful first, and a tech line.
-   - Write each achievement in long form: the problem, the judgment or trade-off, the action, and the result with its measurement conditions. One line may combine the Facts that make up one achievement.
+   - Write each achievement in long form as one story about one event: the problem, the judgment or trade-off, the action, and the result with its measurement conditions. A line combines only the Facts of that event, never Facts from different events to cover more ground.
    - Then projects, education, certificates and training, awards and publications, and languages.
    - Wording may add context, the judgment behind an action and the impact a Fact states, but never raises a role ("took part in" never becomes "led") and never adds a number, title, date or skill. Follow the Strategy's resume guidance.
-3. **Mark gaps**: add `gap` where a line lacks something, such as a result, a team size, a company's context or a date. Where no Fact can fill a line yet, give the item only a `gap`.
+3. **Mark gaps**: where a line lacks something, such as a result, a team size, a company's context or a date, find the open follow-up question that asks for it, or add one to the Import report of the Source the Fact cites, with an id from `next-id <id> question`. Set `gap` to that question's id. Where no Fact can fill a line yet, give the item only a `gap`.
 4. **Save**: pipe it to `master save <id>`; `--replace` writes it again.
-5. **Follow up**: ask the user about the Gaps appendix and save the answers as in Follow-up questions. The new Facts make the Master resume stale, so offer to write it again.
+5. **Follow up**: ask the questions the gaps name and save the answers as in Follow-up questions. The new Facts make the Master resume stale, so offer to write it again.
 6. **Report** the two files, how many Facts it cites and leaves out, and its gaps.
 
 ### Write resumes
