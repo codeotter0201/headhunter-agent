@@ -1989,12 +1989,14 @@ class ResumeWriter:
                 self.lines[lang] += ["", " · ".join(header[lang]) + " <!-- profile -->"]
 
     def finish(self) -> None:
-        """Check Glossary names and English text across everything written, then raise if anything failed."""
+        """Check Glossary names and English text across everything written, then raise if anything failed. A name
+        that is the same in both languages, such as a brand, is correct in Chinese lines too."""
         for zh, en in sorted(set(self.pairs.values())):
             for where, text in self.texts:
+                english_in_chinese = zh != en and term_used(en, text["zh"])
                 if zh in text["zh"] and en.lower() not in text["en"].lower():
                     self.errors.append(f"{where}: glossary.yml names {zh} as {en!r} in English")
-                elif term_used(en, text["en"]) and zh not in text["zh"] or term_used(en, text["zh"]):
+                elif (term_used(en, text["en"]) and zh not in text["zh"]) or english_in_chinese:
                     self.errors.append(f"{where}: glossary.yml names {en} as {zh!r} in Chinese")
         for where, text in self.texts:
             if HAN.search(text["en"]):
