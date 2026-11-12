@@ -122,9 +122,11 @@ _Avoid_: success probability, chance, odds
 
 **Master resume**:
 The Candidate's complete resume, one in Chinese and one in English: every
-active, sourced Fact written out in full and grouped as a resume, or listed as
-left out with a reason, with the gaps still to fill marked in place. It is
-internal and never sent; extracts for specific contexts start from it.
+active, sourced Fact written out in full and grouped as a resume, or left out
+by a Strategy rule that names it, with the gaps still to fill marked in place,
+each naming the follow-up question that asks for it. The Strategy decides its
+order and emphasis. It is internal and never sent; extracts for specific
+contexts start from it.
 _Avoid_: base resume, full CV, career document
 
 **Tailored resume**:

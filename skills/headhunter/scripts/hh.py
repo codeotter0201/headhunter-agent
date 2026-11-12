@@ -668,9 +668,10 @@ def validate_candidate(folder: Path, known_tags: set) -> list:
         errors.extend(f"{name}: {e}" for e in check_resume(path, lang, by_id))
     masters = master_paths(folder)
     if any(path.exists() for path in masters.values()):
+        question_ids = {q["id"] for q in report_questions(folder)}
         for lang, path in masters.items():
             if path.exists():
-                errors.extend(f"{name}: {e}" for e in check_master(path, lang, by_id))
+                errors.extend(f"{name}: {e}" for e in check_master(path, lang, by_id, question_ids))
             else:
                 err(f"master resume: {path.name} is missing; write both with master save --replace")
     for jid, path in application_dirs(folder):
@@ -1733,9 +1734,32 @@ def master_paths(folder: Path) -> dict:
     return {lang: folder / f"master-resume.{lang}.md" for lang in RESUME_LANGS}
 
 
-def check_master(path: Path, lang: str, by_id: dict) -> list:
+def strategy_fact_lines(folder: Path) -> dict:
+    """The line numbers of strategy.md, outside the Roles section the script keeps, that name each Fact id."""
+    path = folder / "strategy.md"
+    named, in_roles = {}, False
+    if not path.exists():
+        return named
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if line.startswith("## "):
+            in_roles = line.strip() == "## Roles"
+            continue
+        if not in_roles:
+            for fid in dict.fromkeys(re.findall(r"\bf-\d+\b", line)):
+                named.setdefault(fid, []).append(n)
+    return named
+
+
+def render_strategy_lines(numbers: list, lang: str) -> str:
+    if lang == "zh":
+        return f"strategy.md 第 {'、'.join(map(str, numbers))} 行"
+    return f"strategy.md line{'s' if len(numbers) > 1 else ''} {', '.join(map(str, numbers))}"
+
+
+def check_master(path: Path, lang: str, by_id: dict, question_ids: set) -> list:
     """Problems in the Master resume's Markdown, checked like a Tailored resume's. A line that holds only a gap marker
-    cites nothing, and the Gaps and Left out appendices need only name known Facts."""
+    cites nothing, every gap marker names a follow-up question, and the Gaps and Left out appendices need only name
+    known Facts."""
     where = f"master resume {lang}"
     try:
         front, body = read_job(path)
@@ -1759,6 +1783,11 @@ def check_master(path: Path, lang: str, by_id: dict) -> list:
             if lang == "en" and HAN.search(text):
                 errors.append(f"{where}: line {n} has Chinese text: {text[:60]}")
             continue
+        for marker in GAP_MARK.findall(text):
+            qid = re.sub(r"^\s*(?:【待補：|\[To fill: )|(?:】|\])$", "", marker)
+            if qid not in question_ids:
+                errors.append(f"{where}: line {n} has the gap marker {marker.strip()}, which names no follow-up "
+                              "question in the Import reports")
         cite = CITATION.search(text)
         claim = GAP_MARK.sub("", text[:cite.start()] if cite else text)
         if cite:
@@ -3491,7 +3520,8 @@ def cmd_master_plan(args):
         ends = [period_months(f.get("period")) for f in groups[org]]
         return max((10 ** 6 if end is None and start is not None else end or -1 for start, end in ends), default=-1)
 
-    print(f"Write every one of these {len(usable)} Facts, or list it under left_out with a reason"
+    named = strategy_fact_lines(folder)
+    print(f"Write every one of these {len(usable)} Facts, or list it under left_out when a rule in strategy.md names it"
           + (" (+ not in the current Master resume)" if written else "") + ":")
     for org in sorted(groups, key=lambda o: (not o, -latest(o))):
         print(f"  {org or '(no organization)'}")
@@ -3499,9 +3529,16 @@ def cmd_master_plan(args):
             for fact in (f for f in groups[org] if f.get("kind") == kind):
                 mark = "+" if written and fact["id"] not in covered else " "
                 missing = f"  (missing: {', '.join(fact['missing'])})" if fact.get("missing") else ""
+                rule = f"  ({render_strategy_lines(named[fact['id']], 'en')})" if fact["id"] in named else ""
                 print(f"  {mark} {fact['id']} [{kind}, {fact.get('evidence')}] {fact.get('period') or '-'}  "
-                      f"{fact.get('statement')}{missing}")
+                      f"{fact.get('statement')}{missing}{rule}")
     print_unusable(facts, by_id)
+    open_questions = [q for q in report_questions(folder) if q["open"]]
+    print("\nOpen follow-up questions; a gap names the one that asks for what is missing:")
+    for q in open_questions:
+        print(f"  {q['id']}: {q['text']}")
+    if not open_questions:
+        print("  none; add one to the Import report of the Source the Fact cites before marking a gap")
     print_glossary_and_header(profile, glossary)
 
 
@@ -3520,6 +3557,7 @@ def cmd_master_save(args):
     by_id, errors = writer.by_id, writer.errors
     errors += [f"unknown field {key!r}; fields are {', '.join(MASTER_FIELDS)}" for key in data if key not in MASTER_FIELDS]
     companies, titles, schools = (glossary_pairs(glossary, (k,)) for k in ("company", "title", "school"))
+    question_ids = {q["id"] for q in report_questions(folder)}
     cited, body_ids, highlight_ids, gaps = set(), set(), {}, []
 
     def items(key) -> list:
@@ -3543,7 +3581,10 @@ def cmd_master_save(args):
             return []
         gap = item.get("gap")
         if gap is not None:
-            gap = writer.label(gap, f"{where} gap")
+            gap = str(gap).strip()
+            if gap not in question_ids:
+                errors.append(f"{where}: gap must be the id of a follow-up question in the Import reports, such as "
+                              f"q-012, not {gap!r}; add the question to the report of the Source the Fact cites")
         if gap is None or any(item.get(lang) for lang in RESUME_LANGS):
             ids = writer.cited(item, where)
             text = writer.bilingual(item, where, ids)
@@ -3551,7 +3592,7 @@ def cmd_master_save(args):
             ids = writer.cited(item, where) if item.get("facts") else []
             text = {lang: "" for lang in RESUME_LANGS}
         if gap is not None:
-            text = {lang: f"{text[lang]}{'' if lang == 'zh' else ' '}{GAP_MARKS[lang][0]}{gap[lang]}{GAP_MARKS[lang][1]}"
+            text = {lang: f"{text[lang]}{'' if lang == 'zh' else ' '}{GAP_MARKS[lang][0]}{gap}{GAP_MARKS[lang][1]}"
                     .strip() for lang in RESUME_LANGS}
             gaps.append((place, gap, ids))
         cited.update(ids)
@@ -3702,26 +3743,28 @@ def cmd_master_save(args):
             if key == "projects":
                 body_ids.update(found)
 
+    named = strategy_fact_lines(folder)
     left = {}
-    for n, entry in enumerate(items("left_out"), 1):
+    for n, fid in enumerate(items("left_out"), 1):
         where = f"left_out {n}"
-        ids = entry.get("facts") if isinstance(entry, dict) else None
-        if not isinstance(ids, list) or not ids:
-            errors.append(f"{where}: list the Facts it leaves out")
+        if not isinstance(fid, str):
+            errors.append(f"{where}: give the id of a Fact a rule in strategy.md leaves out, such as f-010")
             continue
-        reason = writer.label(entry, where)
-        for fid in ids:
-            problem = fact_problem(by_id, fid)
-            if problem:
-                errors.append(f"{where}: {problem}; only active, sourced Facts need listing")
-            elif fid in cited:
-                errors.append(f"{where}: {fid} is cited by a line; leave it out of left_out")
-            else:
-                left[fid] = reason
+        problem = fact_problem(by_id, fid)
+        if problem:
+            errors.append(f"{where}: {problem}; only active, sourced Facts need listing")
+        elif fid in cited:
+            errors.append(f"{where}: {fid} is cited by a line; leave it out of left_out")
+        elif fid not in named:
+            errors.append(f"{where}: no rule in strategy.md names {fid}; cite it in a line, or add a rule that names it "
+                          "once the user agrees")
+        else:
+            left[fid] = named[fid]
     uncovered = [f["id"] for f in facts if isinstance(f, dict) and not fact_problem(by_id, f.get("id"))
                  and f["id"] not in cited and f["id"] not in left]
     if uncovered:
-        errors.append(f"cite {', '.join(uncovered)} in a line, or list them under left_out with a reason")
+        errors.append(f"cite {', '.join(uncovered)} in a line, or list them under left_out when a rule in "
+                      "strategy.md names them")
     for where, ids in highlight_ids.items():
         for fid in ids:
             if fid not in body_ids:
@@ -3739,15 +3782,15 @@ def cmd_master_save(args):
             for lang, colon, open_, sep, close in (("zh", "：", "（", "；", "）"), ("en", ": ", " (", "; ", ")")):
                 where = f"{place[lang]}{colon}" if place[lang] else ""
                 note = f"{open_}{sep.join(notes[lang])}{close}" if ids else ""
-                writer.lines[lang].append(f"- {where}{gap[lang]}{note}")
+                writer.lines[lang].append(f"- {where}{gap}{note}")
     if left:
         writer.heading({lang: MASTER_HEADINGS[lang]["left_out"] for lang in RESUME_LANGS})
-        reasons = {}
-        for fid, reason in left.items():
-            reasons.setdefault(tuple(reason.values()), []).append(fid)
-        for (zh, en), ids in reasons.items():
-            writer.lines["zh"].append(f"- {', '.join(ids)}：{zh}")
-            writer.lines["en"].append(f"- {', '.join(ids)}: {en}")
+        rules = {}
+        for fid, numbers in left.items():
+            rules.setdefault(tuple(numbers), []).append(fid)
+        for numbers, ids in rules.items():
+            writer.lines["zh"].append(f"- {', '.join(ids)}：{render_strategy_lines(list(numbers), 'zh')}")
+            writer.lines["en"].append(f"- {', '.join(ids)}: {render_strategy_lines(list(numbers), 'en')}")
 
     covered = sorted(cited | set(left), key=lambda f: id_number(f, "f") or 0)
     built_from = {"strategy": digest(strategy_guidance(folder)), "facts": {fid: digest(by_id[fid]) for fid in covered}}
