@@ -1,6 +1,6 @@
 ---
 name: headhunter
-description: AI headhunter for the user's own job search or for many candidates at once. Use when the user wants to add, update, search or archive candidates in their candidate database; import any material about a candidate (notes, work logs, photos, resumes, GitHub repos) and have it checked, tagged and followed up with questions; read a job listing URL (104, CakeResume, Yourator, LinkedIn, company careers pages) and evaluate jobs against candidates and their target roles with a fit score and a success rating; write a tailored Chinese and English resume for a job; or track application progress, interview feedback and what to fix next.
+description: AI headhunter for the user's own job search or for many candidates at once. Use when the user wants to add, update, search or archive candidates in their candidate database; import any material about a candidate (notes, work logs, photos, resumes, GitHub repos) and have it checked, tagged and followed up with questions; read a job listing URL (104, CakeResume, Yourator, LinkedIn, company careers pages) and evaluate jobs against candidates and their target roles with a fit score and a success rating; write a complete Chinese and English master resume of every fact, or a tailored resume for a job; or track application progress, interview feedback and what to fix next.
 ---
 
 # headhunter
@@ -64,6 +64,8 @@ python3 <skill folder>/scripts/hh.py <command>
 | `resume plan <id> <job>` | Show what an Application's resumes start from: the Candidate's Strategy, the Role profile, the Evaluation's evidence, what to leave out, the usable Facts and the Glossary |
 | `resume save <id> <job> [--replace]` | Write `resume.zh.md` and `resume.en.md` from JSON or YAML on stdin and print both to PDF; nothing is written if any check fails |
 | `resume pdf <id> <job>` | Check both resumes and print them to PDF again, after editing them by hand |
+| `master plan <id>` | Show what the Master resume is written from: the Candidate's Strategy, every usable Fact by organization and kind with its missing fields, the Glossary and the header, and whether the Master resume is current |
+| `master save <id> [--replace]` | Write `master-resume.zh.md` and `master-resume.en.md` from JSON or YAML on stdin; nothing is written if any check fails |
 | `validate [<id>]` | Check `taxonomy.yml`, Candidate folders (with their Roles, Evaluations, resumes, Applications and Feedback) and Job snapshots |
 | `index` | Delete and rebuild `index.sqlite` |
 | `search candidates` / `search facts` | Filter the Index (see Search) |
@@ -85,6 +87,8 @@ Searches rebuild the Index first when any file changed. Run `validate` after edi
     imports/                       Import reports, including unanswered follow-up questions
     glossary.yml                   Chinese ↔ English names for companies, titles, schools, terms
     strategy.md                    job-search strategy; its Roles section is kept by the script
+    master-resume.zh.md            Master resume in Chinese: every usable Fact, citing them; never sent, no PDF
+    master-resume.en.md            the same in English
     roles/<role-slug>/
       role.yml                     Role: title, level, industries, priority, state, requirements
       profile.md                   Role profile: positioning, evidence, gaps
@@ -253,6 +257,54 @@ The script adds `candidate`, `job`, `evaluated`, `candidate_level` (from `profil
 
 The fit score is the weighted sum, rounded. It maps to a Success rating: 75 and above high, 55 to 74 medium, below 55 low. Failing any hard requirement lowers the rating by one level; low stays low. The reasons name the band, each failed or unconfirmed hard requirement, the must-haves missing or unconfirmed, and the strongest and weakest dimensions.
 
+**master-resume.zh.md / master-resume.en.md**: the Master resume, one per Candidate. A YAML block between `---` lines (`candidate`, `lang`, `written`, and `built_from`: a digest of the Strategy's guidance and of every Fact it covers), then the resume, written by `master save` from what you give it:
+
+```yaml
+headline: {zh: 後端與資料工程師, en: Backend and data engineer, facts: [f-001, f-004]}
+summary:                          # one or more sentences, not tied to a Role
+  - {zh: ..., en: ..., facts: [f-004, f-001]}
+skills:                           # grouped; where each was used, with years only from Fact periods
+  - {label: {zh: 程式語言, en: Languages}, zh: Python、SQL（2020 起）, en: "Python, SQL (since 2020)", facts: [f-011]}
+highlights:                       # the 3–5 strongest results; their Facts are cited in experience or projects too
+  - {zh: ..., en: ..., facts: [f-002, f-003]}
+experience:                       # reverse chronological
+  - org: 智慧水表專案              # a company in glossary.yml, cited by one of its Facts; or name: {zh, en}
+    title: 資料工程師              # optional: a title in glossary.yml that its Facts state
+    period: 2020-01..2022-02      # optional: the period of one of its Facts
+    facts: [f-006, f-004]
+    roles:                        # optional: one line per title, such as titles at several companies
+      - {org: 乙科技, title: 資料工程師, period: 2021-07..2022-02, facts: [f-005]}
+    context: {zh: ..., en: ..., facts: [f-006]}            # what the organization or project is
+    scope: {gap: {zh: 團隊人數, en: team size}, facts: [f-004]}   # team size, ownership, reporting line
+    groups:                       # achievements by project or theme, most impactful first
+      - heading: {zh: 資料匯入, en: Data import}             # optional
+        bullets: [{zh: ..., en: ..., facts: [f-007]}]
+    tech: {zh: Kafka、PostgreSQL, en: "Kafka, PostgreSQL", facts: [f-008]}
+projects: [{zh: ..., en: ..., facts: [f-014]}]
+education: [{school: 範例大學, zh: 資訊管理學士, en: B.S. in Information Management, period: 2014-09..2018-06, facts: [f-012]}]
+certificates: [{zh: ..., en: ..., facts: [f-015]}]         # certificates and training
+awards: []                        # awards, publications, talks, patents
+languages: [{zh: 英文：TOEIC 850（2019）, en: "English: TOEIC 850 (2019)", facts: [f-013]}]
+left_out: [{facts: [f-010], zh: 依 Strategy 不放這段經歷, en: The Strategy leaves this role out}]
+```
+
+- `org` is a company in `glossary.yml`; a self-directed stretch, such as independent development or study, takes `name` instead. `school` and `period` are optional in `education`.
+- Any item may add `gap: {zh, en}`: what is missing there, such as a result or a team size. The line shows it as `【待補：…】` or `[To fill: …]`. An item with only a gap, and optionally its Facts, stands for a line no Fact can fill yet.
+- Sections appear in the order above, after the header the script writes from `profile.yml`; a section with no items is left out. Two appendices follow, not part of the resume: Gaps (待補) lists every gap with its Facts' `missing` fields, and Left out (未寫入) lists `left_out` with its reasons.
+- Every line other than headings and gap-only lines ends with the Facts it comes from, as in Tailored resumes.
+
+`master save` refuses a Master resume when:
+
+- a Fact is inferred, superseded or in conflict, or an item cites none
+- a number in a line is not in the statements or periods of the Facts it cites
+- a company, title, school or location is not in `glossary.yml`, an `org` is not the organization of one of its Facts, a title or school is not in its Facts, or a period is not one of its Facts'
+- the Chinese and English lines name a Glossary entry differently, or the English has Chinese in it
+- an active, sourced Fact is neither cited nor listed under `left_out`, or `left_out` lists a cited or unusable Fact
+- a highlight cites a Fact that no `experience` or `projects` line cites
+- the headline or summary is missing
+
+The Master resume is stale when a Fact it covers changed or was removed, an active, sourced Fact is not covered, or the Strategy's guidance changed; `candidate show` and `master plan` say which. `validate` checks the Markdown after hand edits as it checks Tailored resumes; lines that hold only a gap need no Facts, and the appendices only need to name known Facts. The Master resume has no PDF.
+
 **resume.zh.md / resume.en.md**: a YAML block between `---` lines (`candidate`, `job`, `role`, `lang`, `written`, and `role_profile`, the build date of the Role profile it started from), then the resume, written by `resume save` from what you give it:
 
 ```yaml
@@ -366,7 +418,7 @@ Import never asks for or depends on a target Role.
 
 ### Follow-up questions
 
-When you start working with a Candidate, run `questions <id>` and offer the open ones again, and run `role stale <id>` to offer rebuilding out-of-date Role profiles. Save the user's answers as a Source with `source add <id> - --type interview`, cite them with `at: q-<number>`, mark the questions answered in their report, and add or update Facts.
+When you start working with a Candidate, run `questions <id>` and offer the open ones again, run `role stale <id>` to offer rebuilding out-of-date Role profiles, and offer to write the Master resume again when `candidate show <id>` reports it stale. Save the user's answers as a Source with `source add <id> - --type interview`, cite them with `at: q-<number>`, mark the questions answered in their report, and add or update Facts.
 
 ### Inferred Facts
 
@@ -378,7 +430,7 @@ When new input contradicts a Fact, write the new Fact, set both to `state: confl
 
 ### View, update, archive
 
-- `candidate show <id>`: profile summary, Facts by kind and evidence level, conflicts, top Tags, open follow-up questions, a Strategy summary and the Roles with their profile state.
+- `candidate show <id>`: profile summary, Facts by kind and evidence level, conflicts, top Tags, open follow-up questions, a Strategy summary, whether the Master resume is current, and the Roles with their profile state.
 - Update basics by editing `profile.yml`, then `validate`.
 - `candidate archive <id>` removes a Candidate from searches; `candidate restore <id>` brings them back. Never delete a Candidate folder.
 
@@ -407,6 +459,23 @@ Each Evaluation compares one Job snapshot with one Candidate under the Role that
 6. **Report** the Success rating with its reasons, the gaps with how to close them, and the risks. Ask the questions the gaps need and save the answers as in Follow-up questions.
 7. **No fitting Role**: offer to create a Role from the Job: its title (add it to `glossary.yml`), requirements from its must-haves and nice-to-haves with their Tags, `origin: job` and the Job id. Run `role new` only when the user agrees.
 8. **Refine Roles**: when `evaluation save` reports proposed changes, run `role refine <id> <role>`. It proposes Tags that two or more Jobs evaluated under the Role require and no requirement has (a must-have when at least half of those Jobs list it as one), and assumed or Job requirements those Jobs also ask for. Show them to the user, apply the accepted ones with `--accept`, then rebuild the Role profile.
+
+### Write the Master resume
+
+The Master resume writes out every usable Fact of a Candidate as one complete resume, in Chinese and English. It is internal: the user reads it to review and confirm the Facts, and extracts for specific contexts start from it. It is never sent. Write it when the user asks, and again when it is stale.
+
+1. **Plan**: `master plan <id>` shows the Candidate's Strategy without its Roles section, every usable Fact grouped by organization, newest first, and by kind, with its period, evidence and missing fields, the Facts never to use, the Glossary and the header. Add any company, title, school or location still missing from `glossary.yml`.
+2. **Write** every usable Fact into a section, or list it under `left_out` with the reason, such as the Strategy leaving that experience out.
+   - **Summary**: a headline and a few sentences, not tied to a Role: years and fields, signature strengths, representative results, background. Viewpoints in the Strategy may shape its wording, but every sentence cites Facts.
+   - **Skills** in groups, each naming where it was used. **Highlights**: the 3–5 strongest results across organizations.
+   - **Experience**, newest first: one block per organization, a self-directed stretch such as independent development or study (`name`), or one project with titles at several companies (`roles`, one line per title, as a promotion within one company is shown). Each block has a context line (what the organization or project is), a scope line (team size, ownership, reporting line), achievements grouped under headings by project or theme with the most impactful first, and a tech line.
+   - Write each achievement in long form: the problem, the judgment or trade-off, the action, and the result with its measurement conditions. One line may combine the Facts that make up one achievement.
+   - Then projects, education, certificates and training, awards and publications, and languages.
+   - Wording may add context, the judgment behind an action and the impact a Fact states, but never raises a role ("took part in" never becomes "led") and never adds a number, title, date or skill. Follow the Strategy's resume guidance.
+3. **Mark gaps**: add `gap` where a line lacks something, such as a result, a team size, a company's context or a date. Where no Fact can fill a line yet, give the item only a `gap`.
+4. **Save**: pipe it to `master save <id>`; `--replace` writes it again.
+5. **Follow up**: ask the user about the Gaps appendix and save the answers as in Follow-up questions. The new Facts make the Master resume stale, so offer to write it again.
+6. **Report** the two files, how many Facts it cites and leaves out, and its gaps.
 
 ### Write resumes
 
